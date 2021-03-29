@@ -8,7 +8,7 @@
 #ifndef EXAMPLES_MSG_PING_PONG_COMMON
 #define EXAMPLES_MSG_PING_PONG_COMMON
 
-#define MSG_SIZE sizeof(uint64_t)
+#define MSG_SIZE 56 //sizeof(uint64_t)
 
 /* Both buffers are allocated one after another. */
 #define RECV_OFFSET	0

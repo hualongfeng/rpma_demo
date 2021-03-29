@@ -39,10 +39,10 @@ main(int argc, char *argv[])
 
 	/* prepare memory */
 	struct rpma_mr_local *recv_mr, *send_mr;
-	uint64_t *recv = malloc_aligned(MSG_SIZE);
+	void *recv = malloc_aligned(MSG_SIZE);
 	if (recv == NULL)
 		return -1;
-	uint64_t *send = malloc_aligned(MSG_SIZE);
+	void *send = malloc_aligned(MSG_SIZE);
 	if (send == NULL) {
 		free(recv);
 		return -1;
@@ -102,78 +102,84 @@ main(int argc, char *argv[])
 		goto err_conn_disconnect;
 	}
 
-	/* RPMA_OP_SEND completion in the first round is not present */
-	int send_cmpl = 1;
 	int recv_cmpl = 0;
 
-	while (1) {
-		do {
-			/* prepare completions, get one and validate it */
-			if ((ret = rpma_conn_completion_wait(conn))) {
-				break;
-			} else if ((ret = rpma_conn_completion_get(conn,
-					&cmpl))) {
-				break;
-			} else if (cmpl.op_status != IBV_WC_SUCCESS) {
+	do {
+		/* prepare completions, get one and validate it */
+		if ((ret = rpma_conn_completion_wait(conn))) {
+			break;
+		} else if ((ret = rpma_conn_completion_get(conn,
+				&cmpl))) {
+			break;
+		} else if (cmpl.op_status != IBV_WC_SUCCESS) {
 
+			(void) fprintf(stderr,
+				"operation %d failed: %s\n",
+				cmpl.op,
+				ibv_wc_status_str(cmpl.op_status));
+
+			ret = -1;
+			break;
+		}
+
+		if (cmpl.op == RPMA_OP_RECV) {
+			if (cmpl.op_context != recv ||
+					cmpl.byte_len != MSG_SIZE) {
 				(void) fprintf(stderr,
-					"operation %d failed: %s\n",
-					cmpl.op,
-					ibv_wc_status_str(cmpl.op_status));
-
+					"received completion is not as expected (%p != %p [cmpl.op_context] || %"
+					PRIu32
+					" != %ld [cmpl.byte_len] )\n",
+					cmpl.op_context, recv,
+					cmpl.byte_len, MSG_SIZE);
 				ret = -1;
 				break;
 			}
 
-			if (cmpl.op == RPMA_OP_SEND) {
-				send_cmpl = 1;
-			} else if (cmpl.op == RPMA_OP_RECV) {
-				if (cmpl.op_context != recv ||
-						cmpl.byte_len != MSG_SIZE) {
-					(void) fprintf(stderr,
-						"received completion is not as expected (%p != %p [cmpl.op_context] || %"
-						PRIu32
-						" != %ld [cmpl.byte_len] )\n",
-						cmpl.op_context, recv,
-						cmpl.byte_len, MSG_SIZE);
-					ret = -1;
-					break;
-				}
+			recv_cmpl = 1;
+		}
+	} while (!recv_cmpl);
 
-				recv_cmpl = 1;
-			}
-		} while (!send_cmpl || !recv_cmpl);
 
-		if (ret)
-			break;
+	/* print the received old value of the client's counter */
+	uint64_t* length = (uint64_t*)recv;
+	(void) printf("Alloc memory size: %" PRIu64 "\n", *length);
 
-		if (*recv == I_M_DONE)
-			break;
+	/* resources - memory region */
+        void *mr_ptr = NULL;
+        size_t mr_size = 0;
+        size_t data_offset = 0;
+        struct rpma_mr_local *mr = NULL;
 
-		/* print the received old value of the client's counter */
-		(void) printf("Value received: %" PRIu64 "\n", *recv);
+	mr_ptr = malloc_aligned(*length);
+	if (mr_ptr == NULL) return -1;
+	mr_size = *length;
 
-		/* calculate a new counter's value */
-		*send = *recv + 1;
+	/* register the memory */
+	ret = rpma_mr_reg(peer, mr_ptr, mr_size,
+                        RPMA_MR_USAGE_WRITE_DST, &mr);
 
-		/* prepare a receive for the client's response */
-		if ((ret = rpma_recv(conn, recv_mr, 0, MSG_SIZE, recv)))
-			break;
+        /* get size of the memory region's descriptor */
+        size_t mr_desc_size;
+        ret = rpma_mr_get_descriptor_size(mr, &mr_desc_size);
+        if (ret)
+                goto err_mr_dereg;
 
-		/* send the new value to the client */
-		(void) printf("Value sent: %" PRIu64 "\n", *send);
-		if ((ret = rpma_send(conn, send_mr, 0, MSG_SIZE,
-				/*
-				 * XXX when using RPMA_F_COMPLETION_ON_ERROR
-				 * after few rounds rpma_send() returns ENOMEM.
-				 */
-				RPMA_F_COMPLETION_ALWAYS, NULL)))
-			break;
+	/* calculate data for the client write */
+        struct common_data data;
+        data.data_offset = 3141; //data_offset;
+        data.mr_desc_size = mr_desc_size;
 
-		/* reset */
-		send_cmpl = 0;
-		recv_cmpl = 0;
-	}
+        /* get the memory region's descriptor */
+        ret = rpma_mr_get_descriptor(mr, &data.descriptors[0]);
+        if (ret)
+                goto err_mr_dereg;
+
+	//copy common_data to send buffer
+	memcpy(send, &data, sizeof(data));
+
+	/* send the common_data to the client */
+	if ((ret = rpma_send(conn, send_mr, 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, NULL)))
+
 
 err_conn_disconnect:
 	ret |= common_disconnect_and_wait_for_conn_close(&conn);
@@ -182,6 +188,7 @@ err_mr_dereg:
 	/* deregister the memory regions */
 	ret |= rpma_mr_dereg(&send_mr);
 	ret |= rpma_mr_dereg(&recv_mr);
+	ret |= rpma_mr_dereg(&mr);
 
 err_ep_shutdown:
 	ret |= rpma_ep_shutdown(&ep);
@@ -193,6 +200,7 @@ err_peer_delete:
 err_free:
 	free(send);
 	free(recv);
+	free(mr_ptr);
 
 	return ret ? -1 : 0;
 }
