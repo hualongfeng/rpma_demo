@@ -128,7 +128,7 @@ main(int argc, char *argv[])
 				(void) fprintf(stderr,
 					"received completion is not as expected (%p != %p [cmpl.op_context] || %"
 					PRIu32
-					" != %ld [cmpl.byte_len] )\n",
+					" != %d [cmpl.byte_len] )\n",
 					cmpl.op_context, recv,
 					cmpl.byte_len, MSG_SIZE);
 				ret = -1;
@@ -145,6 +145,7 @@ main(int argc, char *argv[])
 	(void) printf("Alloc memory size: %" PRIu64 "\n", *length);
 
 	/* resources - memory region */
+	struct rpma_peer_cfg *pcfg = NULL;
         void *mr_ptr = NULL;
         size_t mr_size = 0;
         size_t data_offset = 0;
@@ -156,33 +157,73 @@ main(int argc, char *argv[])
 
 	/* register the memory */
 	ret = rpma_mr_reg(peer, mr_ptr, mr_size,
-                        RPMA_MR_USAGE_WRITE_DST, &mr);
+                        RPMA_MR_USAGE_WRITE_DST | RPMA_MR_USAGE_FLUSH_TYPE_VISIBILITY, &mr);
+	if(ret) {
+		printf("register failed");
+	} else {
+		printf("register success\n");
+	}
 
         /* get size of the memory region's descriptor */
         size_t mr_desc_size;
         ret = rpma_mr_get_descriptor_size(mr, &mr_desc_size);
         if (ret)
                 goto err_mr_dereg;
+	printf("mr_desc_size: %ld\n", mr_desc_size);
 
+	/* create a peer configuration structure */
+	ret = rpma_peer_cfg_new(&pcfg);
+
+	/* get size of the peer config descriptor */
+	size_t pcfg_desc_size;
+	ret = rpma_peer_cfg_get_descriptor_size(pcfg, &pcfg_desc_size);
+        if (ret)
+                goto err_mr_dereg;
+
+	printf("pcfg_desc_size: %ld\n", pcfg_desc_size);
 	/* calculate data for the client write */
         struct common_data data;
-        data.data_offset = 3141; //data_offset;
+        data.data_offset = data_offset;
         data.mr_desc_size = mr_desc_size;
+	data.pcfg_desc_size = pcfg_desc_size;
 
         /* get the memory region's descriptor */
         ret = rpma_mr_get_descriptor(mr, &data.descriptors[0]);
         if (ret)
                 goto err_mr_dereg;
 
+	/* create a peer configuration structure */
+	ret = rpma_peer_cfg_new(&pcfg);
+	if (ret)
+                goto err_mr_dereg;
+	/*
+         * Get the peer's configuration descriptor.
+         * The pcfg_desc descriptor is saved in the `descriptors[]` array
+         * just after the mr_desc descriptor.
+         */
+	ret = rpma_peer_cfg_get_descriptor(pcfg,
+                        &data.descriptors[mr_desc_size]);
+	if (ret)
+		goto err_mr_dereg;
+
 	//copy common_data to send buffer
 	memcpy(send, &data, sizeof(data));
 
 	/* send the common_data to the client */
 	if ((ret = rpma_send(conn, send_mr, 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, NULL)))
-
+	ret = rpma_conn_completion_wait(conn);
+	ret = rpma_conn_completion_get(conn,&cmpl);
+	if(!ret) printf("Have finished to send\n");
 
 err_conn_disconnect:
 	ret |= common_disconnect_and_wait_for_conn_close(&conn);
+	char str[65] = {0};
+	str[64] = '\0';
+        for(int i = 0; i < (*length); i+=64) {
+	    memset(str, 0, 64);
+            memcpy(str, mr_ptr+i, 64);
+	    printf("%02d:%s\n", i/64, str);
+        }
 
 err_mr_dereg:
 	/* deregister the memory regions */
