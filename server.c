@@ -35,7 +35,7 @@ main(int argc, char *argv[])
 	/* read common parameters */
 	char *addr = argv[1];
 	char *port = argv[2];
-	int ret;
+	int ret = 0;
 
 	/* prepare memory */
 	struct rpma_mr_local *recv_mr, *send_mr;
@@ -59,42 +59,42 @@ main(int argc, char *argv[])
 	/*
 	 * lookup an ibv_context via the address and create a new peer using it
 	 */
-	if ((ret = server_peer_via_address(addr, &peer)))
+	if ((ret |= server_peer_via_address(addr, &peer)))
 		goto err_free;
 
 	/* start a listening endpoint at addr:port */
-	if ((ret = rpma_ep_listen(peer, addr, port, &ep)))
+	if ((ret |= rpma_ep_listen(peer, addr, port, &ep)))
 		goto err_peer_delete;
 
 	/* register the memory */
-	if ((ret = rpma_mr_reg(peer, recv, MSG_SIZE, RPMA_MR_USAGE_RECV,
+	if ((ret |= rpma_mr_reg(peer, recv, MSG_SIZE, RPMA_MR_USAGE_RECV,
 				&recv_mr)))
 		goto err_ep_shutdown;
-	if ((ret = rpma_mr_reg(peer, send, MSG_SIZE, RPMA_MR_USAGE_SEND,
+	if ((ret |= rpma_mr_reg(peer, send, MSG_SIZE, RPMA_MR_USAGE_SEND,
 				&send_mr))) {
 		(void) rpma_mr_dereg(&recv_mr);
 		goto err_ep_shutdown;
 	}
 
 	/* receive an incoming connection request */
-	if ((ret = rpma_ep_next_conn_req(ep, NULL, &req)))
+	if ((ret |= rpma_ep_next_conn_req(ep, NULL, &req)))
 		goto err_mr_dereg;
 
 	/*
 	 * Put an initial receive to be prepared for the first message of
 	 * the client's ping-pong.
 	 */
-	if ((ret = rpma_conn_req_recv(req, recv_mr, 0, MSG_SIZE, recv))) {
+	if ((ret |= rpma_conn_req_recv(req, recv_mr, 0, MSG_SIZE, recv))) {
 		(void) rpma_conn_req_delete(&req);
 		goto err_mr_dereg;
 	}
 
 	/* accept the connection request and obtain the connection object */
-	if ((ret = rpma_conn_req_connect(&req, NULL, &conn)))
+	if ((ret |= rpma_conn_req_connect(&req, NULL, &conn)))
 		goto err_mr_dereg;
 
 	/* wait for the connection to be established */
-	if ((ret = rpma_conn_next_event(conn, &conn_event)))
+	if ((ret |= rpma_conn_next_event(conn, &conn_event)))
 		goto err_conn_disconnect;
 	if (conn_event != RPMA_CONN_ESTABLISHED) {
 		fprintf(stderr,
@@ -106,9 +106,9 @@ main(int argc, char *argv[])
 
 	do {
 		/* prepare completions, get one and validate it */
-		if ((ret = rpma_conn_completion_wait(conn))) {
+		if ((ret |= rpma_conn_completion_wait(conn))) {
 			break;
-		} else if ((ret = rpma_conn_completion_get(conn,
+		} else if ((ret |= rpma_conn_completion_get(conn,
 				&cmpl))) {
 			break;
 		} else if (cmpl.op_status != IBV_WC_SUCCESS) {
@@ -156,7 +156,7 @@ main(int argc, char *argv[])
 	mr_size = *length;
 
 	/* register the memory */
-	ret = rpma_mr_reg(peer, mr_ptr, mr_size,
+	ret |= rpma_mr_reg(peer, mr_ptr, mr_size,
                         RPMA_MR_USAGE_WRITE_DST | RPMA_MR_USAGE_FLUSH_TYPE_VISIBILITY, &mr);
 	if(ret) {
 		printf("register failed");
@@ -166,17 +166,17 @@ main(int argc, char *argv[])
 
         /* get size of the memory region's descriptor */
         size_t mr_desc_size;
-        ret = rpma_mr_get_descriptor_size(mr, &mr_desc_size);
+        ret |= rpma_mr_get_descriptor_size(mr, &mr_desc_size);
         if (ret)
                 goto err_mr_dereg;
 	printf("mr_desc_size: %ld\n", mr_desc_size);
 
 	/* create a peer configuration structure */
-	ret = rpma_peer_cfg_new(&pcfg);
+	ret |= rpma_peer_cfg_new(&pcfg);
 
 	/* get size of the peer config descriptor */
 	size_t pcfg_desc_size;
-	ret = rpma_peer_cfg_get_descriptor_size(pcfg, &pcfg_desc_size);
+	ret |= rpma_peer_cfg_get_descriptor_size(pcfg, &pcfg_desc_size);
         if (ret)
                 goto err_mr_dereg;
 
@@ -188,12 +188,12 @@ main(int argc, char *argv[])
 	data.pcfg_desc_size = pcfg_desc_size;
 
         /* get the memory region's descriptor */
-        ret = rpma_mr_get_descriptor(mr, &data.descriptors[0]);
+        ret |= rpma_mr_get_descriptor(mr, &data.descriptors[0]);
         if (ret)
                 goto err_mr_dereg;
 
 	/* create a peer configuration structure */
-	ret = rpma_peer_cfg_new(&pcfg);
+	ret |= rpma_peer_cfg_new(&pcfg);
 	if (ret)
                 goto err_mr_dereg;
 	/*
@@ -201,7 +201,7 @@ main(int argc, char *argv[])
          * The pcfg_desc descriptor is saved in the `descriptors[]` array
          * just after the mr_desc descriptor.
          */
-	ret = rpma_peer_cfg_get_descriptor(pcfg,
+	ret |= rpma_peer_cfg_get_descriptor(pcfg,
                         &data.descriptors[mr_desc_size]);
 	if (ret)
 		goto err_mr_dereg;
@@ -210,16 +210,19 @@ main(int argc, char *argv[])
 	memcpy(send, &data, sizeof(data));
 
 	/* send the common_data to the client */
-	if ((ret = rpma_send(conn, send_mr, 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, NULL)))
-	ret = rpma_conn_completion_wait(conn);
-	ret = rpma_conn_completion_get(conn,&cmpl);
+	ret |= rpma_send(conn, send_mr, 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, NULL);
+	ret |= rpma_conn_completion_wait(conn);
+	ret |= rpma_conn_completion_get(conn,&cmpl);
 	if(!ret) printf("Have finished to send\n");
+	else printf("send failed\n");
 
 err_conn_disconnect:
 	ret |= common_disconnect_and_wait_for_conn_close(&conn);
 	char str[65] = {0};
 	str[64] = '\0';
-        for(int i = 0; i < (*length); i+=64) {
+        for(int i = 0; i < 64; i+=64) {
+        //for(int i = 0; i < (*length); i+=64) {
+        //for(int i = (*length - 64 - 1); i < (*length); i+=64) {
 	    memset(str, 0, 64);
             memcpy(str, mr_ptr+i, 64);
 	    printf("%02d:%s\n", i/64, str);
