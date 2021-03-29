@@ -18,8 +18,11 @@
 #include "common-conn.h"
 #include "messages-ping-pong-common.h"
 
-#define USAGE_STR "usage: %s <server_address> <port> <seed> <rounds> " \
-		"[<sleep>]\n"
+//#define USAGE_STR "usage: %s <server_address> <port> <seed> <rounds> " \
+//		"[<sleep>]\n"
+#define USAGE_STR "usage: %s <server_address> <port>"
+#define FLUSH_ID	(void *)0xF01D
+
 
 static uint64_t
 strtoul_noerror(const char *in)
@@ -36,7 +39,7 @@ int
 main(int argc, char *argv[])
 {
 	/* validate parameters */
-	if (argc < 5) {
+	if (argc < 3) {
 		fprintf(stderr, USAGE_STR, argv[0]);
 		exit(-1);
 	}
@@ -48,7 +51,7 @@ main(int argc, char *argv[])
 	/* read common parameters */
 	char *addr = argv[1];
 	char *port = argv[2];
-	uint64_t cntr = 4196; //strtoul_noerror(argv[3]);
+	uint64_t cntr = 4096; //strtoul_noerror(argv[3]);
 	uint64_t rounds = 1; //strtoul_noerror(argv[4]);
 	uint64_t sleep_usec = 0;
 
@@ -95,17 +98,15 @@ main(int argc, char *argv[])
 
 	rounds = 1;
 	cntr = 4096;
-	while (rounds--) {
+//	while (rounds--) {
 		/* prepare a receive for the server's response */
-		if ((ret = rpma_recv(conn, recv_mr, 0, MSG_SIZE, recv)))
-			break;
+		ret |= rpma_recv(conn, recv_mr, 0, MSG_SIZE, recv);
 
 		/* send a message to the server */
 		(void) printf("Value sent: %" PRIu64 "\n", cntr);
 		uint64_t* send64 = send;
 		*send64 = cntr;
-		if ((ret = rpma_send(conn, send_mr, 0, MSG_SIZE, RPMA_F_COMPLETION_ALWAYS, NULL)))
-			break;
+		ret |= rpma_send(conn, send_mr, 0, MSG_SIZE, RPMA_F_COMPLETION_ALWAYS, NULL);
 
 		int send_cmpl = 0;
 		int recv_cmpl = 0;
@@ -133,7 +134,7 @@ main(int argc, char *argv[])
 					(void) fprintf(stderr,
 						"received completion is not as expected (%p != %p [cmpl.op_context] || %"
 						PRIu32
-						" != %ld [cmpl.byte_len] )\n",
+						" != %d [cmpl.byte_len] )\n",
 						cmpl.op_context, recv,
 						cmpl.byte_len, MSG_SIZE);
 					ret = -1;
@@ -146,17 +147,104 @@ main(int argc, char *argv[])
 
 
 		/* copy the new value of the counter and print it out */
-		struct common_data data;
-		memcpy(&data, recv, sizeof(data));
-		printf("Value received: %" PRIu16 "\n", data.data_offset);
-	}
+		struct common_data dst_data;
+		memcpy(&dst_data, recv, sizeof(dst_data));
+		printf("Value received: %" PRIu16 "\n", dst_data.data_offset);
+		printf("received\n");
 
+		/* resources - memory region */
+		struct rpma_peer_cfg *pcfg = NULL;
+		void *mr_ptr = NULL;
+		size_t mr_size = 0;
+		size_t data_offset = 0;
+		struct rpma_mr_remote *dst_mr = NULL;
+		size_t dst_size = 0;
+		size_t dst_offset = 0;
+		struct rpma_mr_local *src_mr = NULL;
+
+		mr_ptr = malloc_aligned(cntr);
+		if (mr_ptr == NULL)
+                        return -1;		
+		mr_size = cntr;
+		char data[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-=";
+		size_t data_size = strlen(data);
+		for(int i = 0; i < cntr; i+=data_size) {
+			memcpy(mr_ptr + i, data, data_size);	
+		}
+	
+        	/* register the memory RDMA write */
+        	ret = rpma_mr_reg(peer, mr_ptr, mr_size, RPMA_MR_USAGE_WRITE_SRC,
+                                &src_mr);
+        	if (ret)
+                	goto err_conn_disconnect;
+
+	        /*
+	         * Create a remote peer configuration structure from the received
+	         * descriptor and apply it to the current connection.
+	         */
+		ret = rpma_peer_cfg_from_descriptor(
+				&dst_data.descriptors[dst_data.mr_desc_size],
+				dst_data.pcfg_desc_size, &pcfg);
+		bool direct_write_to_pmem = false;
+		enum rpma_flush_type flush_type = RPMA_FLUSH_TYPE_VISIBILITY;
+		ret = rpma_peer_cfg_get_direct_write_to_pmem(pcfg, &direct_write_to_pmem);
+		ret |= rpma_conn_apply_remote_peer_cfg(conn, pcfg);
+		(void) rpma_peer_cfg_delete(&pcfg);
+		if (ret)
+			goto err_mr_dereg;
+
+	        /*
+         	* Create a remote memory registration structure from the received
+         	* descriptor.
+         	*/
+	        ret = rpma_mr_remote_from_descriptor(&dst_data.descriptors[0],
+                	        dst_data.mr_desc_size, &dst_mr);
+        	if (ret)
+                	goto err_mr_dereg;
+
+		/* get the remote memory region size */
+		ret = rpma_mr_remote_get_size(dst_mr, &dst_size);
+	        if (ret) {
+        	        goto err_mr_dereg;
+        	} else if (dst_size < cntr) {
+                	fprintf(stderr,
+                                "Remote memory region size too small for writing the data of the assumed size (%zu < %ld)\n",
+                        dst_size, cntr);
+                	goto err_conn_disconnect;
+        	}
+
+		dst_offset = dst_data.data_offset;
+		ret = rpma_write(conn, dst_mr, dst_offset, src_mr,
+                	 	data_offset, mr_size, RPMA_F_COMPLETION_ON_ERROR, NULL);
+
+		flush_type = RPMA_FLUSH_TYPE_VISIBILITY;
+		ret = rpma_flush(conn, dst_mr, dst_offset, KILOBYTE, flush_type, RPMA_F_COMPLETION_ALWAYS, FLUSH_ID);
+		if (ret)
+			goto err_conn_disconnect;
+
+		/* wait for the completion to be ready */
+		ret |= rpma_conn_completion_wait(conn);
+
+		ret |= rpma_conn_completion_get(conn, &cmpl);
+
+	        if (cmpl.op_context != FLUSH_ID) {
+	                (void) fprintf(stderr,
+	                                "unexpected cmpl.op_context value "
+	                                "(0x%" PRIXPTR " != 0x%" PRIXPTR ")\n",
+	                                (uintptr_t)cmpl.op_context,
+	                                (uintptr_t)FLUSH_ID);
+	        }
+	        if (cmpl.op_status != IBV_WC_SUCCESS)
+	                printf("failed\n");
+//	}
+err_conn_disconnect:
 	ret |= common_disconnect_and_wait_for_conn_close(&conn);
 
 err_mr_dereg:
 	/* deregister the memory regions */
 	ret |= rpma_mr_dereg(&send_mr);
 	ret |= rpma_mr_dereg(&recv_mr);
+	ret |= rpma_mr_dereg(&src_mr);
 
 err_peer_delete:
 	/* delete the peer object */
@@ -166,6 +254,7 @@ err_mr_free:
 	/* free the memory */
 	free(send);
 	free(recv);
+	free(mr_ptr);
 
 	return ret ? -1 : 0;
 }
