@@ -48,12 +48,12 @@ main(int argc, char *argv[])
 	/* read common parameters */
 	char *addr = argv[1];
 	char *port = argv[2];
-	uint64_t cntr = strtoul_noerror(argv[3]);
-	uint64_t rounds = strtoul_noerror(argv[4]);
+	uint64_t cntr = 4196; //strtoul_noerror(argv[3]);
+	uint64_t rounds = 1; //strtoul_noerror(argv[4]);
 	uint64_t sleep_usec = 0;
 
-	if (argc == 6)
-		sleep_usec = strtoul_noerror(argv[5]);
+//	if (argc == 6)
+//		sleep_usec = strtoul_noerror(argv[5]);
 
 	int ret;
 
@@ -64,10 +64,10 @@ main(int argc, char *argv[])
 
 	/* prepare memory */
 	struct rpma_mr_local *recv_mr, *send_mr;
-	uint64_t *recv = malloc_aligned(MSG_SIZE);
+	void *recv = malloc_aligned(MSG_SIZE);
 	if (recv == NULL)
 		return -1;
-	uint64_t *send = malloc_aligned(MSG_SIZE);
+	void *send = malloc_aligned(MSG_SIZE);
 	if (send == NULL) {
 		free(recv);
 		return -1;
@@ -93,20 +93,18 @@ main(int argc, char *argv[])
 	if ((ret = client_connect(peer, addr, port, NULL, &conn)))
 		goto err_mr_dereg;
 
-	while (--rounds) {
+	rounds = 1;
+	cntr = 4096;
+	while (rounds--) {
 		/* prepare a receive for the server's response */
 		if ((ret = rpma_recv(conn, recv_mr, 0, MSG_SIZE, recv)))
 			break;
 
 		/* send a message to the server */
 		(void) printf("Value sent: %" PRIu64 "\n", cntr);
-		*send = cntr;
-		if ((ret = rpma_send(conn, send_mr, 0, MSG_SIZE,
-				/*
-				 * XXX when using RPMA_F_COMPLETION_ON_ERROR
-				 * after few rounds rpma_send() returns ENOMEM.
-				 */
-				RPMA_F_COMPLETION_ALWAYS, NULL)))
+		uint64_t* send64 = send;
+		*send64 = cntr;
+		if ((ret = rpma_send(conn, send_mr, 0, MSG_SIZE, RPMA_F_COMPLETION_ALWAYS, NULL)))
 			break;
 
 		int send_cmpl = 0;
@@ -146,22 +144,12 @@ main(int argc, char *argv[])
 			}
 		} while (!send_cmpl || !recv_cmpl);
 
-		if (ret)
-			break;
 
 		/* copy the new value of the counter and print it out */
-		cntr = *recv;
-		printf("Value received: %" PRIu64 "\n", cntr);
-
-		/* sleep if required */
-		if (sleep_usec > 0)
-			(void) usleep(sleep_usec);
+		struct common_data data;
+		memcpy(&data, recv, sizeof(data));
+		printf("Value received: %" PRIu16 "\n", data.data_offset);
 	}
-
-	/* send the I_M_DONE message */
-	*send = I_M_DONE;
-	ret |= rpma_send(conn, send_mr, 0, MSG_SIZE, RPMA_F_COMPLETION_ON_ERROR,
-			NULL);
 
 	ret |= common_disconnect_and_wait_for_conn_close(&conn);
 
