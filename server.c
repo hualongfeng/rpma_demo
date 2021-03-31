@@ -1,12 +1,3 @@
-// SPDX-License-Identifier: BSD-3-Clause
-/* Copyright 2020, Intel Corporation */
-
-/*
- * server.c -- a server of the messages-ping-pong example
- *
- * Please see README.md for a detailed description of this example.
- */
-
 #include <inttypes.h>
 #include <librpma.h>
 #include <stdlib.h>
@@ -17,234 +8,536 @@
 #define USAGE_STR "usage: %s <server_address> <port>\n"
 
 #include "common-conn.h"
+#include "common-epoll.h"
 #include "messages-ping-pong-common.h"
 
-int
-main(int argc, char *argv[])
+#define CLIENT_MAX 10
+
+struct client_res {
+  /* RPMA resources */
+  struct rpma_conn_req *req;
+  struct rpma_conn* conn;
+
+  /* resources - memory regions */
+  void* dst_ptr;
+  struct rpma_mr_local* dst_mr; // used to read/write
+  void* send_ptr;
+  struct rpma_mr_local* send_mr;
+  void* recv_ptr;
+  struct rpma_mr_local* recv_mr;
+
+  /* events */
+  struct custom_event ev_conn_event;
+  struct custom_event ev_conn_cmpl;
+
+  /* parent and identifier */
+  struct server_res* svr;
+  //TODO:后期使用链表 
+  int client_id;
+};
+
+struct server_res {
+  /* RPMA resources */
+  struct rpma_peer *peer;
+  struct rpma_ep *ep;
+
+  /* epoll and event */
+  int epoll;
+  struct custom_event ev_incoming;
+
+  /* client's resources */
+  // TODO: 改成链表数据结构
+  struct client_res clients[CLIENT_MAX];
+};
+
+/*
+ * server_init -- initialize server's resources
+ */
+int server_init(struct server_res *svr, struct rpma_peer* peer)
 {
-	/* validate parameters */
-	if (argc < 3) {
-		fprintf(stderr, USAGE_STR, argv[0]);
-		exit(-1);
-	}
+  svr->epoll = epoll_create1(EPOLL_CLOEXEC);
+  if (svr->epoll == -1) {
+    return errno;
+  }
 
-	/* configure logging thresholds to see more details */
-	rpma_log_set_threshold(RPMA_LOG_THRESHOLD, RPMA_LOG_LEVEL_INFO);
-	rpma_log_set_threshold(RPMA_LOG_THRESHOLD_AUX, RPMA_LOG_LEVEL_INFO);
+  svr->peer = peer;
 
-	/* read common parameters */
-	char *addr = argv[1];
-	char *port = argv[2];
-	int ret = 0;
+  return 0;
+}
 
-	/* prepare memory */
-	struct rpma_mr_local *recv_mr, *send_mr;
-	void *recv = malloc_aligned(MSG_SIZE);
-	if (recv == NULL)
-		return -1;
-	void *send = malloc_aligned(MSG_SIZE);
-	if (send == NULL) {
-		free(recv);
-		return -1;
-	}
+/*
+ * server_fini -- release server's resources
+ */
+int server_fini(struct server_res *svr)
+{
+  /* close the epoll */
+  if (close(svr->epoll)) {
+    return errno;
+  }
 
-	/* RPMA resources */
-	struct rpma_peer *peer = NULL;
-	struct rpma_ep *ep = NULL;
-	struct rpma_conn_req *req = NULL;
-	enum rpma_conn_event conn_event = RPMA_CONN_UNDEFINED;
-	struct rpma_conn *conn = NULL;
-	struct rpma_completion cmpl;
+  return 0;
+}
 
-	/*
-	 * lookup an ibv_context via the address and create a new peer using it
-	 */
-	if ((ret |= server_peer_via_address(addr, &peer)))
-		goto err_free;
+/*
+ * client_new -- find a slot for the incoming client
+ */
+struct client_res* client_new(struct server_res *svr, struct rpma_conn_req *req)
+{
+  /* find the first free slot */
+  struct client_res *clnt = NULL;
+  for (int i = 0; i < CLIENT_MAX; ++i) {
+    clnt = &svr->clients[i];
+    if (clnt->conn != NULL)
+            continue;
+    printf("client slot: %d\n", i);
+    clnt->client_id = i;
+    clnt->svr = svr;
+    clnt->req = req;
+    clnt->ev_conn_cmpl.fd  = -1;
+    clnt->ev_conn_event.fd = -1;
 
-	/* start a listening endpoint at addr:port */
-	if ((ret |= rpma_ep_listen(peer, addr, port, &ep)))
-		goto err_peer_delete;
+    clnt->dst_ptr  = NULL;
+    clnt->dst_mr   = NULL;
+    clnt->send_ptr = NULL;
+    clnt->send_mr  = NULL;
+    clnt->recv_ptr = NULL;
+    clnt->recv_mr  = NULL;
 
-	/* register the memory */
-	if ((ret |= rpma_mr_reg(peer, recv, MSG_SIZE, RPMA_MR_USAGE_RECV,
-				&recv_mr)))
-		goto err_ep_shutdown;
-	if ((ret |= rpma_mr_reg(peer, send, MSG_SIZE, RPMA_MR_USAGE_SEND,
-				&send_mr))) {
-		(void) rpma_mr_dereg(&recv_mr);
-		goto err_ep_shutdown;
-	}
-
-	/* receive an incoming connection request */
-	if ((ret |= rpma_ep_next_conn_req(ep, NULL, &req)))
-		goto err_mr_dereg;
-
-	/*
-	 * Put an initial receive to be prepared for the first message of
-	 * the client's ping-pong.
-	 */
-	if ((ret |= rpma_conn_req_recv(req, recv_mr, 0, MSG_SIZE, recv))) {
-		(void) rpma_conn_req_delete(&req);
-		goto err_mr_dereg;
-	}
-
-	/* accept the connection request and obtain the connection object */
-	if ((ret |= rpma_conn_req_connect(&req, NULL, &conn)))
-		goto err_mr_dereg;
-
-	/* wait for the connection to be established */
-	if ((ret |= rpma_conn_next_event(conn, &conn_event)))
-		goto err_conn_disconnect;
-	if (conn_event != RPMA_CONN_ESTABLISHED) {
-		fprintf(stderr,
-				"rpma_conn_next_event returned an unexptected event\n");
-		goto err_conn_disconnect;
-	}
-
-	int recv_cmpl = 0;
-
-	do {
-		/* prepare completions, get one and validate it */
-		if ((ret |= rpma_conn_completion_wait(conn))) {
-			break;
-		} else if ((ret |= rpma_conn_completion_get(conn,
-				&cmpl))) {
-			break;
-		} else if (cmpl.op_status != IBV_WC_SUCCESS) {
-
-			(void) fprintf(stderr,
-				"operation %d failed: %s\n",
-				cmpl.op,
-				ibv_wc_status_str(cmpl.op_status));
-
-			ret = -1;
-			break;
+		/* prepare send/recv memory and register the memory*/
+		clnt->recv_ptr = malloc_aligned(MSG_SIZE);
+    if (clnt->recv_ptr == NULL) {
+      return NULL;
+    }
+		clnt->send_ptr = malloc_aligned(MSG_SIZE);
+		if (clnt->send_ptr == NULL) {
+      free(clnt->recv_ptr);
+      clnt->recv_ptr = NULL;
+			return NULL;
 		}
 
-		if (cmpl.op == RPMA_OP_RECV) {
-			if (cmpl.op_context != recv ||
-					cmpl.byte_len != MSG_SIZE) {
-				(void) fprintf(stderr,
-					"received completion is not as expected (%p != %p [cmpl.op_context] || %"
-					PRIu32
-					" != %d [cmpl.byte_len] )\n",
-					cmpl.op_context, recv,
-					cmpl.byte_len, MSG_SIZE);
-				ret = -1;
-				break;
-			}
+    struct rpma_peer *peer = svr->peer;
+		if(rpma_mr_reg(peer, clnt->recv_ptr, MSG_SIZE, RPMA_MR_USAGE_RECV, &clnt->recv_mr)){
+      free(clnt->recv_ptr);
+      clnt->recv_ptr = NULL;
+      free(clnt->send_ptr);
+      clnt->send_ptr = NULL;
+      return NULL;
+    }
 
-			recv_cmpl = 1;
-		}
-	} while (!recv_cmpl);
+		if(rpma_mr_reg(peer, clnt->send_ptr, MSG_SIZE, RPMA_MR_USAGE_SEND, &clnt->send_mr)){
+      (void) rpma_mr_dereg(&clnt->recv_mr);
+      free(clnt->recv_ptr);
+      clnt->recv_ptr = NULL;
+      free(clnt->send_ptr);
+      clnt->send_ptr = NULL;
+      return NULL;
+    }
+
+    break;
+  }
+
+  return clnt;
+}
+
+void client_handle_completion(struct custom_event* ce);
+void client_handle_connection_event(struct custom_event* ce);
+
+/*
+ * client_add_to_epoll -- add client's file descriptors to epoll
+ */
+int client_add_to_epoll(struct client_res *clnt, int epoll) {
+  /* get the connection's event fd and add it to epoll */
+  int fd;
+  int ret = rpma_conn_get_event_fd(clnt->conn, &fd);
+  if (ret)
+          return ret;
+  ret = epoll_add(epoll, fd, clnt, client_handle_connection_event,
+                  &clnt->ev_conn_event);
+  if (ret)
+          return ret;
+
+  /* get the connection's completion fd and add it to epoll */
+  ret = rpma_conn_get_completion_fd(clnt->conn, &fd);
+  if (ret) {
+          epoll_delete(epoll, &clnt->ev_conn_event);
+          return ret;
+  }
+  ret = epoll_add(epoll, fd, clnt, client_handle_completion,
+                  &clnt->ev_conn_cmpl);
+  if (ret)
+          epoll_delete(epoll, &clnt->ev_conn_event);
+
+  return ret;
+}
+
+/*
+ * client_delete -- release client's resources
+ */
+void client_delete(struct client_res *clnt)
+{
+  struct server_res *svr = clnt->svr;
+
+  char str[65];
+  memcpy(str, clnt->dst_ptr, 64);
+  str[64] = '\0';
+  printf("client.%d: %s\n", clnt->client_id, str);
+
+  if (clnt->ev_conn_cmpl.fd != -1) {
+    epoll_delete(svr->epoll, &clnt->ev_conn_cmpl);
+  }
+
+  if (clnt->ev_conn_event.fd != -1) {
+    epoll_delete(svr->epoll, &clnt->ev_conn_event);
+  }
+
+  /* deregister the memory region */
+  if (clnt->send_mr != NULL) {
+    rpma_mr_dereg(&clnt->send_mr);
+    clnt->send_mr = NULL;
+    free(clnt->send_ptr);
+    clnt->send_ptr = NULL;
+  }
+
+  if (clnt->recv_mr != NULL) {
+    rpma_mr_dereg(&clnt->recv_mr);
+    clnt->recv_mr = NULL;
+    free(clnt->recv_ptr);
+    clnt->recv_ptr = NULL;
+  }
+
+  if(clnt->dst_mr != NULL) {
+    rpma_mr_dereg(&clnt->dst_mr);
+    clnt->dst_mr = NULL;
+    free(clnt->dst_ptr);
+    clnt->dst_ptr = NULL;
+
+  }
+
+  /* delete the connection and set conn to NULL */
+  (void) rpma_conn_delete(&clnt->conn);
+}
+
+int do_send_for_write(struct client_res* clnt) {
+  const struct server_res *svr = clnt->svr;
+  void* recv = clnt->recv_ptr;
+  int ret = 0;
+
+  /* print the received old value of the client's counter */
+  uint64_t* length = (uint64_t*)recv;
+  (void) printf("Alloc memory size: %" PRIu64 "\n", *length);
+
+  /* resources - memory region */
+  struct rpma_peer_cfg *pcfg = NULL;
+  size_t mr_size = 0;
+
+  clnt->dst_ptr = malloc_aligned(*length);
+  if (clnt->dst_ptr == NULL) {
+    return -1;
+  }
+
+  mr_size = *length;
+  /* register the memory */
+  if ((ret = rpma_mr_reg(svr->peer, clnt->dst_ptr, mr_size, 
+        RPMA_MR_USAGE_WRITE_DST | RPMA_MR_USAGE_FLUSH_TYPE_VISIBILITY,
+        &clnt->dst_mr))) {
+    free(clnt->dst_ptr);
+    clnt->dst_ptr = NULL;
+    return ret;
+  }
+
+  /* get size of the memory region's descriptor */
+  size_t mr_desc_size;
+  ret = rpma_mr_get_descriptor_size(clnt->dst_mr, &mr_desc_size);
+
+  /* create a peer configuration structure */
+  ret |= rpma_peer_cfg_new(&pcfg);
+
+  /* get size of the peer config descriptor */
+  size_t pcfg_desc_size;
+  ret |= rpma_peer_cfg_get_descriptor_size(pcfg, &pcfg_desc_size);
+
+  /* calculate data for the client write */
+  struct common_data *data = clnt->send_ptr;
+  data->data_offset = 0;
+  data->mr_desc_size = mr_desc_size;
+  data->pcfg_desc_size = pcfg_desc_size;
+
+  /* get the memory region's descriptor */
+  rpma_mr_get_descriptor(clnt->dst_mr, &data->descriptors[0]);
+  
+  /* create a peer configuration structure */
+  rpma_peer_cfg_new(&pcfg);
+
+  /*
+   * Get the peer's configuration descriptor.
+   * The pcfg_desc descriptor is saved in the `descriptors[]` array
+   * just after the mr_desc descriptor.
+   */
+  rpma_peer_cfg_get_descriptor(pcfg, &data->descriptors[mr_desc_size]);
+
+  (void) rpma_peer_cfg_delete(&pcfg);
+
+  /* prepare a receive for the client's response */
+  rpma_recv(clnt->conn, clnt->recv_mr, 0, MSG_SIZE, clnt->recv_ptr);
+
+  /* send the common_data to the client */
+  rpma_send(clnt->conn, clnt->send_mr, 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, NULL);
+
+  return 0;
+
+}
+
+/*
+ * client_handle_completion -- callback on completion is ready
+ *
+ */
+void client_handle_completion(struct custom_event *ce)
+{
+  struct client_res *clnt = (struct client_res *)ce->arg;
+  const struct server_res *svr = clnt->svr;
+
+  /* prepare detected completions for processing */
+  int ret = rpma_conn_completion_wait(clnt->conn);
+  if (ret) {
+    /* no completion is ready - continue */
+    if (ret == RPMA_E_NO_COMPLETION) {
+      return;
+    }
+
+    /* another error occured - disconnect */
+    //TODO: 为什么要断开链接？
+    (void) rpma_conn_disconnect(clnt->conn);
+    return;
+  }
+
+  /* get next completion */
+  struct rpma_completion cmpl;
+  ret = rpma_conn_completion_get(clnt->conn, &cmpl);
+  if (ret) {
+    /* no completion is ready - continue */
+    if (ret == RPMA_E_NO_COMPLETION) {
+      return;
+    }
+
+    /* another error occured - disconnect */
+    (void) rpma_conn_disconnect(clnt->conn);
+    return;
+  }
+
+  /* validate received completion */
+  if (cmpl.op_status != IBV_WC_SUCCESS) {
+    (void) fprintf(stderr,
+                   "[%d]:[op: %d] received completion is not as expected (%d != %d)\n",
+                   clnt->client_id,
+                   cmpl.op,
+                   cmpl.op_status,
+                   IBV_WC_SUCCESS);
+
+    return;
+  }
+
+  if (cmpl.op == RPMA_OP_RECV) {
+    //TODO: solve the recv condition
+    //1. solve the information based on receive
+    //2. prepare a receive for the client's response;
+    //3. [optional] response the client
+    if (cmpl.op_context != clnt->recv_ptr || cmpl.byte_len != MSG_SIZE) {
+      (void) fprintf(stderr,
+                     "received completion is not as expected (%p != %p [cmpl.op_context] || %"
+                     PRIu32
+                     " != %d [cmpl.byte_len] )\n",
+                     cmpl.op_context, clnt->recv_ptr,
+                     cmpl.byte_len, MSG_SIZE);
+      return;
+    }
+    printf("RPMA_OP_RECV\n");
+    do_send_for_write(clnt);
+  } else if ( cmpl.op == RPMA_OP_SEND) {
+    printf("RPMA_OP_SEND\n");
+    //TODO: solve the send condition after send successfully
+    //now, don't do any thing
+  }
+
+  return;
+}
 
 
-	/* print the received old value of the client's counter */
-	uint64_t* length = (uint64_t*)recv;
-	(void) printf("Alloc memory size: %" PRIu64 "\n", *length);
+/*
+ * client_handle_connection_event -- callback on connection's next event
+ */
+void client_handle_connection_event(struct custom_event *ce)
+{
+  struct client_res *clnt = (struct client_res *)ce->arg;
 
-	/* resources - memory region */
-	struct rpma_peer_cfg *pcfg = NULL;
-        void *mr_ptr = NULL;
-        size_t mr_size = 0;
-        size_t data_offset = 0;
-        struct rpma_mr_local *mr = NULL;
+  /* get next connection's event */
+  enum rpma_conn_event event;
+  int ret = rpma_conn_next_event(clnt->conn, &event);
+  if (ret) {
+    if (ret == RPMA_E_NO_EVENT) {
+      return;
+    }
 
-	mr_ptr = malloc_aligned(*length);
-	if (mr_ptr == NULL) return -1;
-	mr_size = *length;
+    (void) rpma_conn_disconnect(clnt->conn);
+    return;
+  }
 
-	/* register the memory */
-	ret |= rpma_mr_reg(peer, mr_ptr, mr_size,
-                        RPMA_MR_USAGE_WRITE_DST | RPMA_MR_USAGE_FLUSH_TYPE_VISIBILITY, &mr);
-	if(ret) {
-		printf("register failed");
-	} else {
-		printf("register success\n");
-	}
+  /* proceed to the callback specific to the received event */
+  switch (event) {
+    case RPMA_CONN_ESTABLISHED:
+    {
+      //don't do anythings if no private data
+      printf("RPMA_CONN_ESTABLISHED\n");
+      break;
+    }
+    case RPMA_CONN_CLOSED:
+      printf("RPMA_CONN_CLOSED\n");
+    default:
+    {
+      client_delete(clnt);
+      break;
+    }
+  }
+}
 
-        /* get size of the memory region's descriptor */
-        size_t mr_desc_size;
-        ret |= rpma_mr_get_descriptor_size(mr, &mr_desc_size);
-        if (ret)
-                goto err_mr_dereg;
-	printf("mr_desc_size: %ld\n", mr_desc_size);
+/*
+ * server_handle_incoming_client -- callback on endpoint's next incoming
+ * connection
+ *
+ * Get the connection request. If there is not free slots reject it. Otherwise,
+ * accept the incoming connection, get the event and completion file
+ * descriptors, set O_NONBLOCK flag for both of them and add events to
+ * the epoll.
+ * If error will occur at any of the required steps the client is disconnected.
+ */
+void server_handle_incoming_client(struct custom_event *ce)
+{
+  struct server_res *svr = (struct server_res *)ce->arg;
 
-	/* create a peer configuration structure */
-	ret |= rpma_peer_cfg_new(&pcfg);
+  /* receive an incoming connection request */
+  struct rpma_conn_req *req = NULL;
+  if (rpma_ep_next_conn_req(svr->ep, NULL, &req)) {
+    return;
+  }
 
-	/* get size of the peer config descriptor */
-	size_t pcfg_desc_size;
-	ret |= rpma_peer_cfg_get_descriptor_size(pcfg, &pcfg_desc_size);
-        if (ret)
-                goto err_mr_dereg;
+  /* if no free slot is available */
+  struct client_res *clnt = NULL;
+  if ((clnt = client_new(svr, req)) == NULL) {
+    rpma_conn_req_delete(&req);
+    return;
+  }
 
-	printf("pcfg_desc_size: %ld\n", pcfg_desc_size);
-	/* calculate data for the client write */
-        struct common_data data;
-        data.data_offset = data_offset;
-        data.mr_desc_size = mr_desc_size;
-	data.pcfg_desc_size = pcfg_desc_size;
+  /*
+   * Put an initial receive to be prepared for the first message of
+   * the client's ping-pong.
+   */
+  if (rpma_conn_req_recv(req, clnt->recv_mr, 0, MSG_SIZE, clnt->recv_ptr)) {
+    (void) rpma_conn_req_delete(&req);
+    return;
+  }
 
-        /* get the memory region's descriptor */
-        ret |= rpma_mr_get_descriptor(mr, &data.descriptors[0]);
-        if (ret)
-                goto err_mr_dereg;
+  /* accept the connection request and obtain the connection object */
+  if (rpma_conn_req_connect(&req, NULL, &clnt->conn)) {
+    (void) rpma_conn_req_delete(&req);
+    /*
+     * When rpma_conn_req_connect() fails the connection pointer
+     * remains unchanged (in this case it is NULL) so the server
+     * would choose the same client slot if another client will
+     * come. No additional cleanup needed.
+     */
+    return;
+  }
 
-	/* create a peer configuration structure */
-	ret |= rpma_peer_cfg_new(&pcfg);
-	if (ret)
-                goto err_mr_dereg;
-	/*
-         * Get the peer's configuration descriptor.
-         * The pcfg_desc descriptor is saved in the `descriptors[]` array
-         * just after the mr_desc descriptor.
-         */
-	ret |= rpma_peer_cfg_get_descriptor(pcfg,
-                        &data.descriptors[mr_desc_size]);
-	if (ret)
-		goto err_mr_dereg;
+  if (client_add_to_epoll(clnt, svr->epoll)) {
+    (void) rpma_conn_disconnect(clnt->conn);
+  }
+}
 
-	//copy common_data to send buffer
-	memcpy(send, &data, sizeof(data));
+int main(int argc, char* argv[]) {
+  /* validate parameters */
+  if (argc < 3) {
+    fprintf(stderr, USAGE_STR, argv[0]);
+    exit(-1);
+  }
 
-	/* send the common_data to the client */
-	ret |= rpma_send(conn, send_mr, 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, NULL);
-	ret |= rpma_conn_completion_wait(conn);
-	ret |= rpma_conn_completion_get(conn,&cmpl);
-	if(!ret) printf("Have finished to send\n");
-	else printf("send failed\n");
+  /* configure logging thresholds to see more details */
+  rpma_log_set_threshold(RPMA_LOG_THRESHOLD, RPMA_LOG_LEVEL_INFO);
+  rpma_log_set_threshold(RPMA_LOG_THRESHOLD_AUX, RPMA_LOG_LEVEL_INFO);
 
-err_conn_disconnect:
-	ret |= common_disconnect_and_wait_for_conn_close(&conn);
-	char str[65] = {0};
-	str[64] = '\0';
-        for(int i = 0; i < 64; i+=64) {
-        //for(int i = 0; i < (*length); i+=64) {
-        //for(int i = (*length - 64 - 1); i < (*length); i+=64) {
-	    memset(str, 0, 64);
-            memcpy(str, mr_ptr+i, 64);
-	    printf("%02d:%s\n", i/64, str);
-        }
+  /* read common parameters */
+  char *addr = argv[1];
+  char *port = argv[2];
+  int ret = 0;
 
-err_mr_dereg:
-	/* deregister the memory regions */
-	ret |= rpma_mr_dereg(&send_mr);
-	ret |= rpma_mr_dereg(&recv_mr);
-	ret |= rpma_mr_dereg(&mr);
+  /* RPMA resources - general */
+  struct rpma_peer *peer = NULL;
+
+
+  /* server resource */
+  struct server_res svr = {0};
+
+  /*
+   * lookup an ibv_context via the address and create a new peer using it
+   */
+  if ((ret = server_peer_via_address(addr, &peer))) {
+    return ret;
+  }
+
+  /* initialize the server's structure */
+  if (ret = server_init(&svr, peer)) {
+    goto err_peer_delete;
+  }
+
+  /* start a listening endpoint at addr:port */
+  if (ret = rpma_ep_listen(peer, addr, port, &svr.ep)) {
+    goto err_server_fini;
+  }
+
+
+  /* get the endpoint's event file descriptor and add it to epoll */
+  int ep_fd;
+  if (ret = rpma_ep_get_fd(svr.ep, &ep_fd)) {
+    goto err_ep_shutdown;
+  }
+  ret = epoll_add(svr.epoll, ep_fd, &svr, server_handle_incoming_client,
+                  &svr.ev_incoming);
+  if (ret)
+          goto err_ep_shutdown;
+
+
+  /* process epoll's events */
+  struct epoll_event event;
+  struct custom_event *ce;
+  while ((ret = epoll_wait(svr.epoll, &event, 1 /* # of events */,
+                                TIMEOUT_1500S)) == 1) {
+    ce = (struct custom_event *)event.data.ptr;
+    ce->func(ce);
+  }
+
+  /* disconnect all remaining client's */
+  for (int i = 0; i < CLIENT_MAX; ++i) {
+    if (svr.clients[i].conn == NULL) {
+      continue;
+    }
+
+    (void) rpma_conn_disconnect(svr.clients[i].conn);
+  }
+
+  if (ret == 0) {
+    (void) fprintf(stderr, "Server timed out.\n");
+  }
 
 err_ep_shutdown:
-	ret |= rpma_ep_shutdown(&ep);
+  /* shutdown the endpoint */
+  ret |= rpma_ep_shutdown(&svr.ep);
+
+err_server_fini:
+  /* release the server's resources */
+  ret |= server_fini(&svr);
 
 err_peer_delete:
-	/* delete the peer object */
-	ret |= rpma_peer_delete(&peer);
+  /* delete the peer object */
+  ret |= rpma_peer_delete(&peer);
 
-err_free:
-	free(send);
-	free(recv);
-	free(mr_ptr);
-
-	return ret ? -1 : 0;
+  return ret;
 }
+

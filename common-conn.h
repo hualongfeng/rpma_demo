@@ -35,7 +35,8 @@ struct common_data {
 
 #define KILOBYTE 1024
 
-#define TIMEOUT_15S (15000) /* [msec] == 15s */
+#define TIMEOUT_15S   (15000) /* [msec] == 15s */
+#define TIMEOUT_1500S (1500000) /* [msec] == 1500s */
 
 void *malloc_aligned(size_t size);
 
