@@ -32,7 +32,7 @@ struct client_res {
 
   /* parent and identifier */
   struct server_res* svr;
-  //TODO:后期使用链表 
+  //TODO:后期使用链表?
   int client_id;
 };
 
@@ -46,7 +46,7 @@ struct server_res {
   struct custom_event ev_incoming;
 
   /* client's resources */
-  // TODO: 改成链表数据结构
+  // TODO: 改成链表数据结构?
   struct client_res clients[CLIENT_MAX];
 };
 
@@ -302,10 +302,13 @@ void client_handle_completion(struct custom_event *ce)
     /* no completion is ready - continue */
     if (ret == RPMA_E_NO_COMPLETION) {
       return;
+    } else if (ret == RPMA_E_INVAL) {
+      fprintf(stderr, "Line%d :conn is NULL\n", __LINE__);
+    } else if (ret == RPMA_E_PROVIDER) {
+      fprintf(stderr, "Line%d :ibv_poll_cq(3) failed with a provider error\n", __LINE__);
     }
 
     /* another error occured - disconnect */
-    //TODO: 为什么要断开链接？
     (void) rpma_conn_disconnect(clnt->conn);
     return;
   }
@@ -317,6 +320,15 @@ void client_handle_completion(struct custom_event *ce)
     /* no completion is ready - continue */
     if (ret == RPMA_E_NO_COMPLETION) {
       return;
+    } else if (ret == RPMA_E_INVAL) {
+      fprintf(stderr, "Line%d :conn or cmpl is NULL\n", __LINE__);
+    } else if (ret == RPMA_E_PROVIDER) {
+      fprintf(stderr, "Line%d :ibv_poll_cq(3) failed with a provider error\n", __LINE__);
+    } else if (ret == RPMA_E_UNKNOWN) {
+      fprintf(stderr, "Line%d :ibv_poll_cq(3) failed but no provider error is available\n", __LINE__);
+    } else {
+      // RPMA_E_NOSUPP
+      fprintf(stderr, "Line%d :not supported opcode\n", __LINE__);
     }
 
     /* another error occured - disconnect */
@@ -350,12 +362,14 @@ void client_handle_completion(struct custom_event *ce)
                      cmpl.byte_len, MSG_SIZE);
       return;
     }
-    printf("RPMA_OP_RECV\n");
+    fprintf(stdout, "RPMA_OP_RECV\n");
     do_send_for_write(clnt);
   } else if ( cmpl.op == RPMA_OP_SEND) {
-    printf("RPMA_OP_SEND\n");
+    fprintf(stdout, "RPMA_OP_SEND\n");
     //TODO: solve the send condition after send successfully
     //now, don't do any thing
+  } else {
+    fprintf(stderr, "operation: %d\n. Shouldn't step in this", cmpl.op);
   }
 
   return;
@@ -375,6 +389,14 @@ void client_handle_connection_event(struct custom_event *ce)
   if (ret) {
     if (ret == RPMA_E_NO_EVENT) {
       return;
+    } else if (ret == RPMA_E_INVAL) {
+      fprintf(stderr, "Line%d: conn or event is NULL\n", __LINE__);
+    } else if (ret == RPMA_E_UNKNOWN) {
+      fprintf(stderr, "Line%d: unexpected event\n", __LINE__);
+    } else if (ret == RPMA_E_PROVIDER) {
+      fprintf(stderr, "Line%d: rdma_get_cm_event() or rdma_ack_cm_event() failed\n", __LINE__);
+    } else if (ret == RPMA_E_NOMEM) {
+      fprintf(stderr, "Line%d: out of memory\n", __LINE__);
     }
 
     (void) rpma_conn_disconnect(clnt->conn);
@@ -382,21 +404,20 @@ void client_handle_connection_event(struct custom_event *ce)
   }
 
   /* proceed to the callback specific to the received event */
-  switch (event) {
-    case RPMA_CONN_ESTABLISHED:
-    {
-      //don't do anythings if no private data
-      printf("RPMA_CONN_ESTABLISHED\n");
-      break;
-    }
-    case RPMA_CONN_CLOSED:
-      printf("RPMA_CONN_CLOSED\n");
-    default:
-    {
-      client_delete(clnt);
-      break;
-    }
+  if (event == RPMA_CONN_ESTABLISHED) {
+    //don't do anythings if no private data
+    fprintf(stdout, "RPMA_CONN_ESTABLISHED\n");
+    return;
+  } else if (event == RPMA_CONN_CLOSED) {
+    fprintf(stdout, "RPMA_CONN_CLOSED\n");
+  } else if (event == RPMA_CONN_LOST) {
+    fprintf(stdout, "RPMA_CONN_LOST\n");
+  } else {
+    //RPMA_CONN_UNDEFINED
+    fprintf(stdout, "RPMA_CONN_UNDEFINED\n");
   }
+
+  client_delete(clnt);
 }
 
 /*
