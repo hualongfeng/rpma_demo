@@ -26,11 +26,18 @@
 #define DESCRIPTORS_MAX_SIZE 24
 
 struct common_data {
-	uint16_t data_offset;	/* user data offset */
-	uint8_t mr_desc_size;	/* size of mr_desc in descriptors[] */
-	uint8_t pcfg_desc_size;	/* size of pcfg_desc in descriptors[] */
-	/* buffer containing mr_desc and pcfg_desc */
-	char descriptors[DESCRIPTORS_MAX_SIZE];
+  uint64_t data_offset;     /* user data offset */
+  uint32_t mr_desc_size;    /* size of mr_desc in descriptors[] */
+  uint32_t pcfg_desc_size;  /* size of pcfg_desc in descriptors[] */
+  /* buffer containing mr_desc and pcfg_desc */
+  char descriptors[DESCRIPTORS_MAX_SIZE];
+};
+
+struct require_data {
+  uint64_t size; //need to malloc size memory
+  enum rpma_op op;
+  uint32_t path_size;
+  char path[1];
 };
 
 #define KILOBYTE 1024

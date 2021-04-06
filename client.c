@@ -149,7 +149,7 @@ main(int argc, char *argv[])
 		/* copy the new value of the counter and print it out */
 		struct common_data dst_data;
 		memcpy(&dst_data, recv, sizeof(dst_data));
-		printf("Value received: %" PRIu16 "\n", dst_data.data_offset);
+		printf("Value received: %" PRIu64 "\n", dst_data.data_offset);
 		printf("received\n");
 
 		/* resources - memory region */
