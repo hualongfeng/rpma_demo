@@ -4,51 +4,17 @@
 #include <stdio.h>
 #include <sys/epoll.h>
 #include <unistd.h>
+#include <libpmem.h>
 
 #define USAGE_STR "usage: %s <server_address> <port>\n"
 
 #include "common-conn.h"
 #include "common-epoll.h"
 #include "messages-ping-pong-common.h"
+#include "server.h"
+#include "deal_require.h"
 
-#define CLIENT_MAX 10
 
-struct client_res {
-  /* RPMA resources */
-  struct rpma_conn_req *req;
-  struct rpma_conn* conn;
-
-  /* resources - memory regions */
-  void* dst_ptr;
-  struct rpma_mr_local* dst_mr; // used to read/write
-  void* send_ptr;
-  struct rpma_mr_local* send_mr;
-  void* recv_ptr;
-  struct rpma_mr_local* recv_mr;
-
-  /* events */
-  struct custom_event ev_conn_event;
-  struct custom_event ev_conn_cmpl;
-
-  /* parent and identifier */
-  struct server_res* svr;
-  //TODO:后期使用链表?
-  int client_id;
-};
-
-struct server_res {
-  /* RPMA resources */
-  struct rpma_peer *peer;
-  struct rpma_ep *ep;
-
-  /* epoll and event */
-  int epoll;
-  struct custom_event ev_incoming;
-
-  /* client's resources */
-  // TODO: 改成链表数据结构?
-  struct client_res clients[CLIENT_MAX];
-};
 
 /*
  * server_init -- initialize server's resources
@@ -98,6 +64,8 @@ struct client_res* client_new(struct server_res *svr, struct rpma_conn_req *req)
 
     clnt->dst_ptr  = NULL;
     clnt->dst_mr   = NULL;
+    clnt->dst_size = 0;
+    clnt->is_pmem  = false;
     clnt->send_ptr = NULL;
     clnt->send_mr  = NULL;
     clnt->recv_ptr = NULL;
@@ -173,14 +141,16 @@ int client_add_to_epoll(struct client_res *clnt, int epoll) {
 /*
  * client_delete -- release client's resources
  */
-void client_delete(struct client_res *clnt)
-{
+void client_delete(struct client_res *clnt) {
+  printf("%s:%d:%s\n", __FILE__, __LINE__, __FUNCTION__);
   struct server_res *svr = clnt->svr;
 
-  char str[65];
-  memcpy(str, clnt->dst_ptr, 64);
-  str[64] = '\0';
-  printf("client.%d: %s\n", clnt->client_id, str);
+  if(clnt->dst_ptr) {
+    char str[65];
+    memcpy(str, clnt->dst_ptr, 64);
+    str[64] = '\0';
+    printf("client.%d: %s\n", clnt->client_id, str);
+  }
 
   if (clnt->ev_conn_cmpl.fd != -1) {
     epoll_delete(svr->epoll, &clnt->ev_conn_cmpl);
@@ -207,84 +177,17 @@ void client_delete(struct client_res *clnt)
 
   if(clnt->dst_mr != NULL) {
     rpma_mr_dereg(&clnt->dst_mr);
-    clnt->dst_mr = NULL;
-    free(clnt->dst_ptr);
+    printf("%s:%d:is_pmem: %d\n", __FILE__, __LINE__, clnt->is_pmem);
+    if(clnt->is_pmem) {
+      pmem_unmap(clnt->dst_ptr, clnt->dst_size);
+    } else {
+      free(clnt->dst_ptr);
+    }
     clnt->dst_ptr = NULL;
-
   }
 
   /* delete the connection and set conn to NULL */
   (void) rpma_conn_delete(&clnt->conn);
-}
-
-int do_send_for_write(struct client_res* clnt) {
-  const struct server_res *svr = clnt->svr;
-  void* recv = clnt->recv_ptr;
-  int ret = 0;
-
-  /* print the received old value of the client's counter */
-  uint64_t* length = (uint64_t*)recv;
-  (void) printf("Alloc memory size: %" PRIu64 "\n", *length);
-
-  /* resources - memory region */
-  struct rpma_peer_cfg *pcfg = NULL;
-  size_t mr_size = 0;
-
-  clnt->dst_ptr = malloc_aligned(*length);
-  if (clnt->dst_ptr == NULL) {
-    return -1;
-  }
-
-  mr_size = *length;
-  /* register the memory */
-  if ((ret = rpma_mr_reg(svr->peer, clnt->dst_ptr, mr_size, 
-        RPMA_MR_USAGE_WRITE_DST | RPMA_MR_USAGE_FLUSH_TYPE_VISIBILITY,
-        &clnt->dst_mr))) {
-    free(clnt->dst_ptr);
-    clnt->dst_ptr = NULL;
-    return ret;
-  }
-
-  /* get size of the memory region's descriptor */
-  size_t mr_desc_size;
-  ret = rpma_mr_get_descriptor_size(clnt->dst_mr, &mr_desc_size);
-
-  /* create a peer configuration structure */
-  ret |= rpma_peer_cfg_new(&pcfg);
-
-  /* get size of the peer config descriptor */
-  size_t pcfg_desc_size;
-  ret |= rpma_peer_cfg_get_descriptor_size(pcfg, &pcfg_desc_size);
-
-  /* calculate data for the client write */
-  struct common_data *data = clnt->send_ptr;
-  data->data_offset = 0;
-  data->mr_desc_size = mr_desc_size;
-  data->pcfg_desc_size = pcfg_desc_size;
-
-  /* get the memory region's descriptor */
-  rpma_mr_get_descriptor(clnt->dst_mr, &data->descriptors[0]);
-  
-  /* create a peer configuration structure */
-  rpma_peer_cfg_new(&pcfg);
-
-  /*
-   * Get the peer's configuration descriptor.
-   * The pcfg_desc descriptor is saved in the `descriptors[]` array
-   * just after the mr_desc descriptor.
-   */
-  rpma_peer_cfg_get_descriptor(pcfg, &data->descriptors[mr_desc_size]);
-
-  (void) rpma_peer_cfg_delete(&pcfg);
-
-  /* prepare a receive for the client's response */
-  rpma_recv(clnt->conn, clnt->recv_mr, 0, MSG_SIZE, clnt->recv_ptr);
-
-  /* send the common_data to the client */
-  rpma_send(clnt->conn, clnt->send_mr, 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, NULL);
-
-  return 0;
-
 }
 
 /*
@@ -363,7 +266,7 @@ void client_handle_completion(struct custom_event *ce)
       return;
     }
     fprintf(stdout, "RPMA_OP_RECV\n");
-    do_send_for_write(clnt);
+    deal_require(clnt);
   } else if ( cmpl.op == RPMA_OP_SEND) {
     fprintf(stdout, "RPMA_OP_SEND\n");
     //TODO: solve the send condition after send successfully
@@ -479,6 +382,12 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, USAGE_STR, argv[0]);
     exit(-1);
   }
+
+#ifdef USE_LIBPMEM
+  printf("using pmem\n");
+#else
+  printf("Don't use pmem!\n");
+#endif
 
   /* configure logging thresholds to see more details */
   rpma_log_set_threshold(RPMA_LOG_THRESHOLD, RPMA_LOG_LEVEL_INFO);

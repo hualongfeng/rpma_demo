@@ -33,6 +33,19 @@ struct common_data {
   char descriptors[DESCRIPTORS_MAX_SIZE];
 };
 
+enum response_type {
+  RESPONSE_NORMAL           = 0,
+  RESPONSE_MALLOC_FAILED    = 1,
+  RESPONSE_NOT_ENOUGH_SPACE = 2,
+  RESPONSE_NOT_PMEM         = 4,
+  RESPONSE_ERROR            = 8,
+};
+
+struct response_data {
+  enum response_type type;
+  struct common_data data; // the data is valid only if type == RESPONSE_NORMAL
+};
+
 struct require_data {
   uint64_t size; //need to malloc size memory
   enum rpma_op op;
@@ -40,7 +53,11 @@ struct require_data {
   char path[1];
 };
 
-#define KILOBYTE 1024
+#define KILOBYTE     (1024UL)
+#define MEGABYTE     (1024 * KILOBYTE)
+#define GIGABYTE     (1024 * MEGABYTE)
+#define SIZE_10GB    (10 * GIGABYTE)
+#define REQUIRE_SIZE (SIZE_10GB)
 
 #define TIMEOUT_15S   (15000) /* [msec] == 15s */
 #define TIMEOUT_1500S (1500000) /* [msec] == 1500s */

@@ -21,13 +21,18 @@ link_directories(${LIBRPMA_LIBRARY_DIRS})
 
 FIND_LIBRARY(LIBIBVERBS_LIBRARIES ibverbs)
 FIND_LIBRARY(LIBRT_LIBRARIES rt)
+FIND_LIBRARY(LIBPMEM_LIBRARIES pmem)
 
 function(add_example name)
 	set(srcs ${ARGN})
-	add_executable(example-${name} ${srcs})
-	target_include_directories(example-${name} PRIVATE ${LIBRPMA_INCLUDE_DIRS})
-	target_link_libraries(example-${name} rpma  ${LIBIBVERBS_LIBRARIES} ${LIBRT_LIBRARIES})
+	add_executable(${name} ${srcs})
+	target_include_directories(${name} PRIVATE ${LIBRPMA_INCLUDE_DIRS})
+	target_link_libraries(${name} rpma ${LIBPMEM_LIBRARIES} ${LIBIBVERBS_LIBRARIES} ${LIBRT_LIBRARIES})
 endfunction()
 
-add_example(server server.c common-conn.c common-epoll.c)
+add_example(server server.c
+                   common-conn.c
+                   common-epoll.c
+                   deal_require.c
+                   )
 add_example(client client.c common-conn.c)

@@ -51,12 +51,6 @@ main(int argc, char *argv[])
 	/* read common parameters */
 	char *addr = argv[1];
 	char *port = argv[2];
-	uint64_t cntr = 4096; //strtoul_noerror(argv[3]);
-	uint64_t rounds = 1; //strtoul_noerror(argv[4]);
-	uint64_t sleep_usec = 0;
-
-//	if (argc == 6)
-//		sleep_usec = strtoul_noerror(argv[5]);
 
 	int ret;
 
@@ -64,6 +58,17 @@ main(int argc, char *argv[])
 	struct rpma_peer *peer = NULL;
 	struct rpma_conn *conn = NULL;
 	struct rpma_completion cmpl;
+
+	/* resources - memory region */
+	struct rpma_peer_cfg *pcfg = NULL;
+	void *mr_ptr = NULL;
+	size_t mr_size = 0;
+	size_t data_offset = 0;
+	struct rpma_mr_remote *dst_mr = NULL;
+	size_t dst_size = 0;
+	size_t dst_offset = 0;
+	struct rpma_mr_local *src_mr = NULL;
+
 
 	/* prepare memory */
 	struct rpma_mr_local *recv_mr, *send_mr;
@@ -96,16 +101,20 @@ main(int argc, char *argv[])
 	if ((ret = client_connect(peer, addr, port, NULL, &conn)))
 		goto err_mr_dereg;
 
-	rounds = 1;
-	cntr = 4096;
-//	while (rounds--) {
 		/* prepare a receive for the server's response */
 		ret |= rpma_recv(conn, recv_mr, 0, MSG_SIZE, recv);
 
 		/* send a message to the server */
-		(void) printf("Value sent: %" PRIu64 "\n", cntr);
-		uint64_t* send64 = send;
-		*send64 = cntr;
+		(void) printf("Value sent: %" PRIu64 "\n", REQUIRE_SIZE);
+		//uint64_t* send64 = send;
+		//*send64 = cntr;
+    struct require_data* rdata = send;
+    rdata->size = REQUIRE_SIZE;
+    rdata->op   = RPMA_OP_FLUSH;
+    //rdata->op   = RPMA_OP_WRITE;
+    char *path = "/mnt/temp";
+    rdata->path_size = strlen(path);
+    strncpy(rdata->path, path, MSG_SIZE - sizeof(struct require_data));
 		ret |= rpma_send(conn, send_mr, 0, MSG_SIZE, RPMA_F_COMPLETION_ALWAYS, NULL);
 
 		int send_cmpl = 0;
@@ -147,28 +156,23 @@ main(int argc, char *argv[])
 
 
 		/* copy the new value of the counter and print it out */
+    struct response_data* resp_data = recv;
+    if(resp_data->type != RESPONSE_NORMAL) {
+      goto err_conn_disconnect;
+    }
 		struct common_data dst_data;
-		memcpy(&dst_data, recv, sizeof(dst_data));
+		memcpy(&dst_data, &resp_data->data, sizeof(dst_data));
 		printf("Value received: %" PRIu64 "\n", dst_data.data_offset);
 		printf("received\n");
 
-		/* resources - memory region */
-		struct rpma_peer_cfg *pcfg = NULL;
-		void *mr_ptr = NULL;
-		size_t mr_size = 0;
-		size_t data_offset = 0;
-		struct rpma_mr_remote *dst_mr = NULL;
-		size_t dst_size = 0;
-		size_t dst_offset = 0;
-		struct rpma_mr_local *src_mr = NULL;
 
-		mr_ptr = malloc_aligned(cntr);
-		if (mr_ptr == NULL)
-                        return -1;		
-		mr_size = cntr;
+		mr_size = 1024 * 1024 * 4; //REQUIRE_SIZE;
+	//	mr_size = REQUIRE_SIZE;
+		mr_ptr = malloc_aligned(mr_size);
+		if (mr_ptr == NULL) return -1;
 		char data[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-=";
 		size_t data_size = strlen(data);
-		for(int i = 0; i < cntr; i+=data_size) {
+		for(int i = 0; i < mr_size; i+=data_size) {
 			memcpy(mr_ptr + i, data, data_size);	
 		}
 	
@@ -182,60 +186,74 @@ main(int argc, char *argv[])
 	         * Create a remote peer configuration structure from the received
 	         * descriptor and apply it to the current connection.
 	         */
-		ret = rpma_peer_cfg_from_descriptor(
+    bool direct_write_to_pmem = false;
+		enum rpma_flush_type flush_type = RPMA_FLUSH_TYPE_VISIBILITY;
+
+    if(dst_data.pcfg_desc_size) {
+		  ret = rpma_peer_cfg_from_descriptor(
 				&dst_data.descriptors[dst_data.mr_desc_size],
 				dst_data.pcfg_desc_size, &pcfg);
-		bool direct_write_to_pmem = false;
-		enum rpma_flush_type flush_type = RPMA_FLUSH_TYPE_VISIBILITY;
-		ret = rpma_peer_cfg_get_direct_write_to_pmem(pcfg, &direct_write_to_pmem);
-		ret |= rpma_conn_apply_remote_peer_cfg(conn, pcfg);
-		(void) rpma_peer_cfg_delete(&pcfg);
-		if (ret)
-			goto err_mr_dereg;
+		  ret = rpma_peer_cfg_get_direct_write_to_pmem(pcfg, &direct_write_to_pmem);
+		  ret |= rpma_conn_apply_remote_peer_cfg(conn, pcfg);
+		  (void) rpma_peer_cfg_delete(&pcfg);
+		  if (ret)
+			  goto err_mr_dereg;
+    }
 
-	        /*
-         	* Create a remote memory registration structure from the received
-         	* descriptor.
-         	*/
-	        ret = rpma_mr_remote_from_descriptor(&dst_data.descriptors[0],
-                	        dst_data.mr_desc_size, &dst_mr);
-        	if (ret)
-                	goto err_mr_dereg;
+	  /*
+    * Create a remote memory registration structure from the received
+    * descriptor.
+    */
+	  ret = rpma_mr_remote_from_descriptor(&dst_data.descriptors[0],
+               dst_data.mr_desc_size, &dst_mr);
+    if (ret)
+      goto err_mr_dereg;
 
 		/* get the remote memory region size */
 		ret = rpma_mr_remote_get_size(dst_mr, &dst_size);
 	        if (ret) {
         	        goto err_mr_dereg;
-        	} else if (dst_size < cntr) {
+          } else if (dst_size < mr_size) {
                 	fprintf(stderr,
                                 "Remote memory region size too small for writing the data of the assumed size (%zu < %ld)\n",
-                        dst_size, cntr);
+                        dst_size, mr_size);
                 	goto err_conn_disconnect;
         	}
 
 		dst_offset = dst_data.data_offset;
 		ret = rpma_write(conn, dst_mr, dst_offset, src_mr,
+//                      data_offset, mr_size, RPMA_F_COMPLETION_ALWAYS, NULL);
                 	 	data_offset, mr_size, RPMA_F_COMPLETION_ON_ERROR, NULL);
 
-		flush_type = RPMA_FLUSH_TYPE_VISIBILITY;
+
+  /* determine the flush type */
+  if (direct_write_to_pmem) {
+    printf("RPMA_FLUSH_TYPE_PERSISTENT is supported\n");
+    flush_type = RPMA_FLUSH_TYPE_PERSISTENT;
+  } else {
+    printf("RPMA_FLUSH_TYPE_PERSISTENT is NOT supported\n");
+    flush_type = RPMA_FLUSH_TYPE_VISIBILITY;
+  }
+
+
 		ret = rpma_flush(conn, dst_mr, dst_offset, KILOBYTE, flush_type, RPMA_F_COMPLETION_ALWAYS, FLUSH_ID);
-		if (ret)
-			goto err_conn_disconnect;
+//		if (ret)
+//			goto err_conn_disconnect;
 
 		/* wait for the completion to be ready */
 		ret |= rpma_conn_completion_wait(conn);
 
 		ret |= rpma_conn_completion_get(conn, &cmpl);
 
-	        if (cmpl.op_context != FLUSH_ID) {
+/*	        if (cmpl.op_context != FLUSH_ID) {
 	                (void) fprintf(stderr,
 	                                "unexpected cmpl.op_context value "
 	                                "(0x%" PRIXPTR " != 0x%" PRIXPTR ")\n",
 	                                (uintptr_t)cmpl.op_context,
 	                                (uintptr_t)FLUSH_ID);
-	        }
-	        if (cmpl.op_status != IBV_WC_SUCCESS)
-	                printf("failed\n");
+	        }*/
+    if (cmpl.op_status != IBV_WC_SUCCESS)
+      printf("failed\n");
 //	}
 err_conn_disconnect:
 	ret |= common_disconnect_and_wait_for_conn_close(&conn);
@@ -254,7 +272,7 @@ err_mr_free:
 	/* free the memory */
 	free(send);
 	free(recv);
-	free(mr_ptr);
+  if(mr_ptr != NULL) free(mr_ptr);
 
 	return ret ? -1 : 0;
 }
