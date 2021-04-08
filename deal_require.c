@@ -97,13 +97,15 @@ int get_memory_or_pmem(struct client_res* clnt) {
 }
 
 int get_descriptor_for_write(struct client_res* clnt) {
-  get_memory_or_pmem(clnt);
+  if (clnt->dst_ptr == NULL)
+    get_memory_or_pmem(clnt);
   return register_mr_to_descriptor(clnt, RPMA_OP_WRITE);
 }
 
 int get_descriptor_for_flush(struct client_res* clnt) {
   int ret = 0;
-  ret = get_memory_or_pmem(clnt);
+  if (clnt->dst_ptr == NULL)
+    ret = get_memory_or_pmem(clnt);
   ret |= register_mr_to_descriptor(clnt, RPMA_OP_FLUSH);
 
   ret |= register_cfg_to_descriptor(clnt);
