@@ -10,7 +10,7 @@
 int get_descriptor(struct client_res* clnt);
 int get_descriptor_for_write(struct client_res* clnt);
 int get_descriptor_for_flush(struct client_res* clnt);
-int register_mr_to_descriptor(struct client_res* clnt, bool write);
+int register_mr_to_descriptor(struct client_res* clnt, enum rpma_op op);
 int register_cfg_to_descriptor(struct client_res* clnt);
 
 
@@ -47,8 +47,7 @@ int get_descriptor(struct client_res* clnt) {
   }
   return ret;
 }
-
-int get_descriptor_for_write(struct client_res* clnt) {
+int get_memory_or_pmem(struct client_res* clnt) {
   const struct server_res *svr = clnt->svr;
   int ret = 0;
   struct response_data* rdata = clnt->send_ptr;
@@ -92,33 +91,44 @@ int get_descriptor_for_write(struct client_res* clnt) {
     rdata->type |= RESPONSE_MALLOC_FAILED;
     return -1;
   }
-#endif
-
   clnt->dst_size = length;
+#endif
+  return ret;
+}
 
-  bool write = true;
-  return register_mr_to_descriptor(clnt, write);
+int get_descriptor_for_write(struct client_res* clnt) {
+  get_memory_or_pmem(clnt);
+  return register_mr_to_descriptor(clnt, RPMA_OP_WRITE);
 }
 
 int get_descriptor_for_flush(struct client_res* clnt) {
   int ret = 0;
-  ret = get_descriptor_for_write(clnt);
+  ret = get_memory_or_pmem(clnt);
+  ret |= register_mr_to_descriptor(clnt, RPMA_OP_FLUSH);
 
   ret |= register_cfg_to_descriptor(clnt);
   return ret;
 }
 
 
-int register_mr_to_descriptor(struct client_res* clnt, bool write) {
+int register_mr_to_descriptor(struct client_res* clnt, enum rpma_op op) {
   const struct server_res *svr = clnt->svr;
   int ret = 0;
 
   int usage = 0;
-  if(write) {
-    usage |= RPMA_MR_USAGE_WRITE_DST |  (clnt->is_pmem ? RPMA_MR_USAGE_FLUSH_TYPE_PERSISTENT :
-        RPMA_MR_USAGE_FLUSH_TYPE_VISIBILITY);
-  } else {
-    usage |= RPMA_MR_USAGE_READ_SRC;
+  switch (op) {
+    case RPMA_OP_FLUSH:
+      usage |= (clnt->is_pmem ? RPMA_MR_USAGE_FLUSH_TYPE_PERSISTENT : RPMA_MR_USAGE_FLUSH_TYPE_VISIBILITY);
+      // don't have break
+    case RPMA_OP_WRITE:
+      usage |= RPMA_MR_USAGE_WRITE_DST;
+      break;
+    case RPMA_OP_READ:
+      usage |= RPMA_MR_USAGE_READ_SRC;
+      break;
+    default:
+      printf("%s:%d: Warn: Don't step in this\n", __FILE__, __LINE__);
+      break;
   }
 
   /* register the memory */
@@ -146,7 +156,7 @@ int register_mr_to_descriptor(struct client_res* clnt, bool write) {
   return 0;
 }
 
-// must used to flush
+// only used to flush
 int register_cfg_to_descriptor(struct client_res* clnt) {
   const struct server_res *svr = clnt->svr;
   int ret = 0;
