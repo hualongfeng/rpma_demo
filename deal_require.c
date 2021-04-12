@@ -3,6 +3,8 @@
 #include <librpma.h>
 #include <libpmem.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
 #include "common-conn.h"
 #include "server.h"
 
@@ -63,22 +65,30 @@ int get_memory_or_pmem(struct client_res* clnt) {
 
   clnt->is_pmem = 0;
 #ifdef USE_LIBPMEM
-  clnt->dst_ptr = pmem_map_file(path, length, PMEM_FILE_CREATE | PMEM_FILE_SPARSE, 0600, &(clnt->dst_size), &(clnt->is_pmem));
-  printf("pmem_map failed. is_pmem: %d; size: %ld; ptr: %p\n", clnt->is_pmem, clnt->dst_size, clnt->dst_ptr);
+//  truncate(path, length);
+//  clnt->dst_ptr = pmem_map_file(path, length, PMEM_FILE_CREATE | PMEM_FILE_SPARSE, 0600, &(clnt->dst_size), &(clnt->is_pmem));
+  if (access(path, F_OK) != -1) {
+    clnt->dst_ptr = pmem_map_file(path, 0, 0, 0600, &(clnt->dst_size), &(clnt->is_pmem));
+  }
+  else {
+    clnt->dst_ptr = pmem_map_file(path, length, PMEM_FILE_CREATE, 0600, &(clnt->dst_size), &(clnt->is_pmem));
+  }
+  printf("is_pmem: %d; size: %ld; ptr: %p\n", clnt->is_pmem, clnt->dst_size, clnt->dst_ptr);
   printf("path: %s\n", path);
 
-  if(!clnt->is_pmem || clnt->dst_size != length || clnt->dst_ptr == NULL) {
-    if(!clnt->is_pmem) {
+  if (!clnt->is_pmem || clnt->dst_size != length || clnt->dst_ptr == NULL) {
+    printf("pmem_map failed");
+    if (!clnt->is_pmem) {
       rdata->type |= RESPONSE_NOT_PMEM;
     }
     if (clnt->dst_size < length) {
       rdata->type |= RESPONSE_NOT_ENOUGH_SPACE;
     }
-    if(clnt->dst_ptr == NULL) {
+    if (clnt->dst_ptr == NULL) {
       rdata->type |= RESPONSE_ERROR;
     }
 
-    if(clnt->dst_ptr) pmem_unmap(clnt->dst_ptr, length);
+    if (clnt->dst_ptr) pmem_unmap(clnt->dst_ptr, length);
     clnt->dst_ptr  = NULL;
     clnt->dst_size = 0;
     return -1;

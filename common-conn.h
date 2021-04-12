@@ -54,8 +54,8 @@ struct require_data {
 };
 
 #define KILOBYTE     (1024UL)
-#define MEGABYTE     (1024 * KILOBYTE)
-#define GIGABYTE     (1024 * MEGABYTE)
+#define MEGABYTE     (1024UL * KILOBYTE)
+#define GIGABYTE     (1024UL * MEGABYTE)
 #define SIZE_10GB    (10 * GIGABYTE)
 #define REQUIRE_SIZE (SIZE_10GB)
 

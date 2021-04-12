@@ -35,4 +35,7 @@ add_example(server server.c
                    common-epoll.c
                    deal_require.c
                    )
-add_example(client client.c common-conn.c)
+add_example(client client_test.c
+                   common-conn.c
+                   client_op.c
+                   )
