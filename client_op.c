@@ -56,16 +56,17 @@ err_peer_delete:
 
 int rpma_socket_connect(RPMA_socket *socket, const char *addr, const char *port) {
   int ret = 0;
+
   ret = client_connect(socket->peer, addr, port, NULL, &socket->conn);
-  
-  ret && fprintf(stderr, "%s:%d: %s", __FILE__, __LINE__, rpma_err_2str(ret));
+
+  ret && LOG("%s", rpma_err_2str(ret));
   return ret;
 }
 
 int rpma_socket_get_remote_descriptor(RPMA_socket *socket, size_t size,
                            enum rpma_op op, char* path) {
   int ret = 0;
-  printf("%s:%d: %s\n", __FILE__, __LINE__, __FUNCTION__);
+  LOG("size: %ld, op: %d, path: %s", size, op, path);
   /* prepare a receive for the server's response */
   ret |= rpma_recv(socket->conn, socket->recv_mr, 0, MSG_SIZE, socket->recv_ptr);
   struct require_data* rdata = socket->send_ptr;
@@ -75,7 +76,7 @@ int rpma_socket_get_remote_descriptor(RPMA_socket *socket, size_t size,
   strncpy(rdata->path, path, MSG_SIZE - sizeof(struct require_data));
   if (ret |= rpma_send(socket->conn, socket->send_mr, 0, 
                        MSG_SIZE, RPMA_F_COMPLETION_ALWAYS, NULL)) {
-    fprintf(stderr, "%s:%d: %s", __FILE__, __LINE__, rpma_err_2str(ret));
+    LOG("%s", rpma_err_2str(ret));
     return -1;
   }
 
@@ -97,7 +98,7 @@ int rpma_socket_get_remote_descriptor(RPMA_socket *socket, size_t size,
       break;
     } else if (cmpl.op_status != IBV_WC_SUCCESS) {
 
-      fprintf(stderr, "unsuccessful completion of an operation.\n");
+      LOG("unsuccessful completion of an operation.");
       return -1;
     }
 
@@ -106,13 +107,12 @@ int rpma_socket_get_remote_descriptor(RPMA_socket *socket, size_t size,
     } else if (cmpl.op == RPMA_OP_RECV) {
       if (cmpl.op_context != socket->recv_ptr ||
           cmpl.byte_len != MSG_SIZE) {
-        (void) fprintf(stderr,
-          "received completion is not as expected (%p != %p [cmpl.op_context] || %"
-          PRIu32
-          " != %d [cmpl.byte_len] )\n",
-          cmpl.op_context, socket->recv_ptr,
-          cmpl.byte_len, MSG_SIZE);
-        return -1;
+        LOG("received completion is not as expected (%p != %p [cmpl.op_context] || %"
+            PRIu32
+            " != %d [cmpl.byte_len] )",
+            cmpl.op_context, socket->recv_ptr,
+            cmpl.byte_len, MSG_SIZE);
+            return -1;
       }
       recv_cmpl = 1;
     }
@@ -136,7 +136,7 @@ int rpma_socket_get_remote_descriptor(RPMA_socket *socket, size_t size,
     ret |= rpma_conn_apply_remote_peer_cfg(socket->conn, pcfg);
     (void) rpma_peer_cfg_delete(&pcfg);
     if (ret) {
-      fprintf(stderr, "%s:%d: %s", __FILE__, __LINE__, rpma_err_2str(ret));
+      LOG("%s", rpma_err_2str(ret));
     }
   }
 
@@ -146,18 +146,17 @@ int rpma_socket_get_remote_descriptor(RPMA_socket *socket, size_t size,
    */
   if (ret = rpma_mr_remote_from_descriptor(&dst_data->descriptors[0],
              dst_data->mr_desc_size, &socket->dst_mr)) {
-    fprintf(stderr, "%s:%d: %s", __FILE__, __LINE__, rpma_err_2str(ret));
+    LOG("%s", rpma_err_2str(ret));
   }
 
   /* get the remote memory region size */
   if (ret = rpma_mr_remote_get_size(socket->dst_mr, &socket->dst_size)) {
-    fprintf(stderr, "%s:%d: %s", __FILE__, __LINE__, rpma_err_2str(ret));
+    LOG("%s", rpma_err_2str(ret));
   }
 
   if (socket->dst_size < size) {
-    fprintf(stderr, 
-    "%s:%d: Remote memory region size too small for writing the"
-    " data of the assumed size (%zu < %ld)\n",
+    LOG("%s:%d: Remote memory region size too small for writing the"
+    " data of the assumed size (%zu < %ld)",
     __FILE__, __LINE__, socket->dst_size, size);
     return -1;
   }
@@ -167,10 +166,10 @@ int rpma_socket_get_remote_descriptor(RPMA_socket *socket, size_t size,
 
   /* determine the flush type */
   if (direct_write_to_pmem) {
-    printf("RPMA_FLUSH_TYPE_PERSISTENT is supported\n");
+    LOG("RPMA_FLUSH_TYPE_PERSISTENT is supported");
     socket->flush_type = RPMA_FLUSH_TYPE_PERSISTENT;
   } else {
-    printf("RPMA_FLUSH_TYPE_PERSISTENT is NOT supported\n");
+    LOG("RPMA_FLUSH_TYPE_PERSISTENT is NOT supported");
     socket->flush_type = RPMA_FLUSH_TYPE_VISIBILITY;
   }
 
@@ -182,7 +181,6 @@ int rpma_socket_mr_write(RPMA_socket *socket, struct rpma_mr_local *mr, size_t m
   assert(mr);
   assert(mr_size);
   assert(socket->dst_offset + mr_size <= socket->dst_size);
-  printf("%s:%d: %s\n", __FILE__, __LINE__, __FUNCTION__);
 
   int ret = 0;
   struct rpma_completion cmpl;
@@ -191,8 +189,7 @@ int rpma_socket_mr_write(RPMA_socket *socket, struct rpma_mr_local *mr, size_t m
   size_t data_offset = 0;
   LOG("start: %ld", data_offset);
   do {
-//    write_size = remain_size > GIGABYTE ? GIGABYTE : remain_size;
-    write_size = remain_size > (MEGABYTE << 2) ? (MEGABYTE << 2) : remain_size;
+    write_size = remain_size > GIGABYTE ? GIGABYTE : remain_size;
     remain_size -= write_size;
     ret = rpma_write(socket->conn, socket->dst_mr, socket->dst_offset, mr,
                       data_offset, write_size, RPMA_F_COMPLETION_ALWAYS, NULL);
@@ -202,7 +199,7 @@ int rpma_socket_mr_write(RPMA_socket *socket, struct rpma_mr_local *mr, size_t m
 
     LOG("%ld", data_offset);
     if (ret || cmpl.op_status != IBV_WC_SUCCESS || cmpl.op != RPMA_OP_WRITE) {
-      fprintf(stderr, "%s:%d: write failed, %s", __FILE__, __LINE__, rpma_err_2str(ret));
+      LOG("write failed, %s", rpma_err_2str(ret));
       return -1;
     }
     socket->dst_offset += write_size;
@@ -217,22 +214,20 @@ int rpma_socket_mr_write(RPMA_socket *socket, struct rpma_mr_local *mr, size_t m
 int rpma_socket_mr_write1(RPMA_socket *socket, struct rpma_mr_local *mr, size_t mr_size) {
   assert(socket && mr && mr_size && socket->dst_offset + mr_size <= socket->dst_size);
 
-  printf("%s:%d: %s\n", __FILE__, __LINE__, __FUNCTION__);
+  LOG("");
   int ret = 0;
   struct rpma_completion cmpl;
   size_t remain_size = mr_size;
   size_t write_size = mr_size;
   size_t data_offset = 0;
 
-//  while(remain_size > GIGABYTE) {
-  while(remain_size > (MEGABYTE << 2)) {
-//    write_size = GIGABYTE;
-    write_size = (MEGABYTE << 2);
+  while(remain_size > GIGABYTE) {
+    write_size = GIGABYTE;
     remain_size -= write_size;
     ret = rpma_write(socket->conn, socket->dst_mr, socket->dst_offset, mr,
                       data_offset, write_size, RPMA_F_COMPLETION_ON_ERROR, NULL);
 
-    printf("%s:%d: %s %ld\n", __FILE__, __LINE__, __FUNCTION__, data_offset);
+    LOG("%ld", data_offset);
     socket->dst_offset += write_size;
     data_offset += write_size;
   };
@@ -245,7 +240,7 @@ int rpma_socket_mr_write1(RPMA_socket *socket, struct rpma_mr_local *mr, size_t 
   ret |= rpma_conn_completion_get(socket->conn, &cmpl);
 
   if (ret || cmpl.op_status != IBV_WC_SUCCESS || cmpl.op != RPMA_OP_WRITE) {
-    fprintf(stderr, "%s:%d: write failed, %s", __FILE__, __LINE__, rpma_err_2str(ret));
+    LOG("write failed: %s", rpma_err_2str(ret));
     return -1;
   }
   socket->dst_offset += write_size;
@@ -255,18 +250,18 @@ int rpma_socket_mr_write1(RPMA_socket *socket, struct rpma_mr_local *mr, size_t 
 
 int rpma_socket_write(RPMA_socket *socket, void* mr_ptr, size_t mr_size) {
   assert(socket && mr_ptr && mr_size && socket->dst_offset + mr_size <= socket->dst_size);
-  printf("%s:%d: %s\n", __FILE__, __LINE__, __FUNCTION__);
+  LOG("");
 
   int ret = 0;
   struct rpma_mr_local *src_mr = NULL;
   /* register the memory RDMA write */
   if (ret = rpma_mr_reg(socket->peer, mr_ptr, mr_size, RPMA_MR_USAGE_WRITE_SRC,
                                 &src_mr)) {
-    fprintf(stderr, "%s:%d: %s", __FILE__, __LINE__, rpma_err_2str(ret));
+    LOG("%s", rpma_err_2str(ret));
     return ret;
   }
 
-  ret = rpma_socket_mr_write1(socket, src_mr, mr_size);
+  ret = rpma_socket_mr_write(socket, src_mr, mr_size);
 
   rpma_mr_dereg(&src_mr);
   return ret;
@@ -274,13 +269,13 @@ int rpma_socket_write(RPMA_socket *socket, void* mr_ptr, size_t mr_size) {
 
 int rpma_socket_mr_flush(RPMA_socket *socket, struct rpma_mr_local* mr, size_t mr_size) {
   assert(socket && mr && mr_size && socket->dst_offset + mr_size <= socket->dst_size);
-  printf("%s:%d: %s\n", __FILE__, __LINE__, __FUNCTION__);
 
   int ret = 0;
   struct rpma_completion cmpl;
   size_t remain_size = mr_size;
   size_t write_size = mr_size;
   size_t data_offset = 0;
+  LOG("start: %ld", data_offset);
   do {
     write_size = remain_size > GIGABYTE ? GIGABYTE : remain_size;
     remain_size -= write_size;
@@ -293,43 +288,46 @@ int rpma_socket_mr_flush(RPMA_socket *socket, struct rpma_mr_local* mr, size_t m
     ret |= rpma_conn_completion_get(socket->conn, &cmpl);
 
     if (ret || cmpl.op_status != IBV_WC_SUCCESS || cmpl.op_context != mr) {
-      fprintf(stderr, "%s:%d: write failed, %s\n"
-                      "unexpected cmpl.op_context value "
-                      "(0x%" PRIXPTR " != 0x%" PRIXPTR ")\n",
-                      __FILE__, __LINE__, rpma_err_2str(ret),
-                      (uintptr_t)cmpl.op_context,
-                      (uintptr_t)mr
-                      );
+      LOG("write failed, %s\n"
+          "unexpected cmpl.op_context value "
+          "(0x%" PRIXPTR " != 0x%" PRIXPTR ")\n",
+          rpma_err_2str(ret),
+          (uintptr_t)cmpl.op_context,
+          (uintptr_t)mr
+         );
       return -1;
     }
     socket->dst_offset += write_size;
     data_offset += write_size;
+    LOG("%ld", data_offset);
   } while(remain_size != 0);
 
+  LOG("end: %ld", data_offset);
   return 0;
 }
 
 
 int rpma_socket_mr_flush1(RPMA_socket *socket, struct rpma_mr_local* mr, size_t mr_size) {
   assert(socket && mr && mr_size && socket->dst_offset + mr_size <= socket->dst_size);
-  printf("%s:%d: %s\n", __FILE__, __LINE__, __FUNCTION__);
 
   int ret = 0;
   struct rpma_completion cmpl;
   size_t remain_size = mr_size;
   size_t write_size = mr_size;
   size_t data_offset = 0;
+  LOG("start: %ld", data_offset);
   while(remain_size > GIGABYTE) {
     write_size = GIGABYTE;
     remain_size -= write_size;
     ret = rpma_write(socket->conn, socket->dst_mr, socket->dst_offset, mr,
                       data_offset, write_size, RPMA_F_COMPLETION_ON_ERROR, NULL);
 
-    ret = rpma_flush(socket->conn, socket->dst_mr, socket->dst_offset, write_size,
-                     socket->flush_type, RPMA_F_COMPLETION_ON_ERROR, mr);
+//    ret = rpma_flush(socket->conn, socket->dst_mr, socket->dst_offset, write_size,
+//                     socket->flush_type, RPMA_F_COMPLETION_ON_ERROR, mr);
     
     socket->dst_offset += write_size;
     data_offset += write_size;
+    LOG("%ld", data_offset);
   };
 
   write_size = remain_size;
@@ -343,18 +341,19 @@ int rpma_socket_mr_flush1(RPMA_socket *socket, struct rpma_mr_local* mr, size_t 
   ret |= rpma_conn_completion_get(socket->conn, &cmpl);
 
   if (ret || cmpl.op_status != IBV_WC_SUCCESS || cmpl.op_context != mr) {
-    fprintf(stderr, "%s:%d: write failed, %s\n"
-                    "unexpected cmpl.op_context value "
-                    "(0x%" PRIXPTR " != 0x%" PRIXPTR ")\n",
-                    __FILE__, __LINE__, rpma_err_2str(ret),
-                    (uintptr_t)cmpl.op_context,
-                    (uintptr_t)mr
-                    );
+    LOG("write failed, %s\n"
+        "unexpected cmpl.op_context value "
+        "(0x%" PRIXPTR " != 0x%" PRIXPTR ")\n",
+        rpma_err_2str(ret),
+        (uintptr_t)cmpl.op_context,
+        (uintptr_t)mr
+       );
     return -1;
   }
   socket->dst_offset += write_size;
-//  data_offset += write_size;
+  data_offset += write_size;
 
+  LOG("end: %ld", data_offset);
   return 0;
 }
 
@@ -364,18 +363,18 @@ int rpma_socket_flush(RPMA_socket *socket, void* mr_ptr, size_t mr_size) {
   assert(mr_ptr);
   assert(mr_size);
   assert(socket->dst_offset + mr_size <= socket->dst_size);
-  printf("%s:%d: %s\n", __FILE__, __LINE__, __FUNCTION__);
+  LOG("");
 
   int ret = 0;
   struct rpma_mr_local *src_mr = NULL;
   /* register the memory RDMA write */
   if (ret = rpma_mr_reg(socket->peer, mr_ptr, mr_size, RPMA_MR_USAGE_WRITE_SRC,
                                 &src_mr)) {
-    fprintf(stderr, "%s:%d: %s", __FILE__, __LINE__, rpma_err_2str(ret));
+    LOG("%s", rpma_err_2str(ret));
     return ret;
   }
 
-  ret = rpma_socket_mr_flush1(socket, src_mr, mr_size);
+  ret = rpma_socket_mr_flush(socket, src_mr, mr_size);
 
   rpma_mr_dereg(&src_mr);
   return ret;
@@ -384,7 +383,7 @@ int rpma_socket_flush(RPMA_socket *socket, void* mr_ptr, size_t mr_size) {
 
 
 void rpma_socket_close(RPMA_socket *socket) {
-  printf("%s:%d: %s\n", __FILE__, __LINE__, __FUNCTION__);
+  LOG("");
   if (socket->recv_ptr) {
     rpma_mr_dereg(&socket->recv_mr);
     free(socket->recv_ptr);

@@ -18,8 +18,6 @@
 #include "common-conn.h"
 #include "messages-ping-pong-common.h"
 
-//#define USAGE_STR "usage: %s <server_address> <port> <seed> <rounds> " \
-//		"[<sleep>]\n"
 #define USAGE_STR "usage: %s <server_address> <port>"
 #define FLUSH_ID	(void *)0xF01D
 
@@ -166,11 +164,13 @@ main(int argc, char *argv[])
 		printf("received\n");
 
 
-		mr_size = 1024 * 1024 * 4; //REQUIRE_SIZE;
+		mr_size = 1024 * 1024 * 1024; //REQUIRE_SIZE;
 	//	mr_size = REQUIRE_SIZE;
-		mr_ptr = malloc_aligned(mr_size);
+		//mr_ptr = malloc_aligned(mr_size);
+		mr_ptr = malloc(mr_size);
+    printf("mr_size: %lx; mr_ptr: %p\n", mr_size, mr_ptr);
 		if (mr_ptr == NULL) return -1;
-		char data[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-=";
+		char data[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-\n";
 		size_t data_size = strlen(data);
 		for(int i = 0; i < mr_size; i+=data_size) {
 			memcpy(mr_ptr + i, data, data_size);	
@@ -236,7 +236,7 @@ main(int argc, char *argv[])
   }
 
 
-		ret = rpma_flush(conn, dst_mr, dst_offset, KILOBYTE, flush_type, RPMA_F_COMPLETION_ALWAYS, FLUSH_ID);
+		ret = rpma_flush(conn, dst_mr, dst_offset, mr_size, flush_type, RPMA_F_COMPLETION_ALWAYS, FLUSH_ID);
 //		if (ret)
 //			goto err_conn_disconnect;
 
@@ -244,16 +244,57 @@ main(int argc, char *argv[])
 		ret |= rpma_conn_completion_wait(conn);
 
 		ret |= rpma_conn_completion_get(conn, &cmpl);
+    printf("%s:%d: op:%d\n", __FILE__, __LINE__, cmpl.op);
 
-/*	        if (cmpl.op_context != FLUSH_ID) {
-	                (void) fprintf(stderr,
-	                                "unexpected cmpl.op_context value "
-	                                "(0x%" PRIXPTR " != 0x%" PRIXPTR ")\n",
-	                                (uintptr_t)cmpl.op_context,
-	                                (uintptr_t)FLUSH_ID);
-	        }*/
+
+	  if (cmpl.op_context != FLUSH_ID) {
+	    (void) fprintf(stderr,
+	                   "unexpected cmpl.op_context value "
+	                   "(0x%" PRIXPTR " != 0x%" PRIXPTR ")\n",
+	                   (uintptr_t)cmpl.op_context,
+	                   (uintptr_t)FLUSH_ID);
+	  }
     if (cmpl.op_status != IBV_WC_SUCCESS)
       printf("failed\n");
+    else
+      printf("success\n");
+
+
+
+		ret = rpma_write(conn, dst_mr, dst_offset+mr_size, src_mr,
+                      data_offset, mr_size, RPMA_F_COMPLETION_ON_ERROR, NULL);
+		ret = rpma_flush(conn, dst_mr, dst_offset+mr_size, mr_size, flush_type, RPMA_F_COMPLETION_ALWAYS, FLUSH_ID);
+
+		ret |= rpma_conn_completion_wait(conn);
+		ret |= rpma_conn_completion_get(conn, &cmpl);
+    printf("%s:%d: op:%d\n offset: %ld\n", __FILE__, __LINE__, cmpl.op, mr_size);
+
+
+
+	  if (cmpl.op_context != FLUSH_ID) {
+	    (void) fprintf(stderr,
+	                   "unexpected cmpl.op_context value "
+	                   "(0x%" PRIXPTR " != 0x%" PRIXPTR ")\n",
+	                   (uintptr_t)cmpl.op_context,
+	                   (uintptr_t)FLUSH_ID);
+	  }
+    if (cmpl.op_status != IBV_WC_SUCCESS)
+      printf("failed\n");
+    else
+      printf("success\n");
+  for(int i = 2; i < 10; i++) {
+		ret = rpma_write(conn, dst_mr, dst_offset + mr_size * i, src_mr,
+                      data_offset, mr_size, RPMA_F_COMPLETION_ALWAYS, NULL);
+		ret |= rpma_conn_completion_wait(conn);
+		ret |= rpma_conn_completion_get(conn, &cmpl);
+    if (cmpl.op_status != IBV_WC_SUCCESS)
+      printf("failed\n");
+    else
+      printf("success\n");
+  }
+
+
+
 //	}
 err_conn_disconnect:
 	ret |= common_disconnect_and_wait_for_conn_close(&conn);

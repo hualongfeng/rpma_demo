@@ -13,7 +13,7 @@
 #include "messages-ping-pong-common.h"
 #include "server.h"
 #include "deal_require.h"
-
+#include "log.h"
 
 
 /*
@@ -54,8 +54,8 @@ struct client_res* client_new(struct server_res *svr, struct rpma_conn_req *req)
   for (int i = 0; i < CLIENT_MAX; ++i) {
     clnt = &svr->clients[i];
     if (clnt->conn != NULL)
-            continue;
-    printf("client slot: %d\n", i);
+      continue;
+    LOG("client slot: %d", i);
     clnt->client_id = i;
     clnt->svr = svr;
     clnt->req = req;
@@ -71,20 +71,20 @@ struct client_res* client_new(struct server_res *svr, struct rpma_conn_req *req)
     clnt->recv_ptr = NULL;
     clnt->recv_mr  = NULL;
 
-		/* prepare send/recv memory and register the memory*/
-		clnt->recv_ptr = malloc_aligned(MSG_SIZE);
+    /* prepare send/recv memory and register the memory*/
+    clnt->recv_ptr = malloc_aligned(MSG_SIZE);
     if (clnt->recv_ptr == NULL) {
       return NULL;
     }
-		clnt->send_ptr = malloc_aligned(MSG_SIZE);
-		if (clnt->send_ptr == NULL) {
+    clnt->send_ptr = malloc_aligned(MSG_SIZE);
+    if (clnt->send_ptr == NULL) {
       free(clnt->recv_ptr);
       clnt->recv_ptr = NULL;
-			return NULL;
-		}
+      return NULL;
+    }
 
     struct rpma_peer *peer = svr->peer;
-		if(rpma_mr_reg(peer, clnt->recv_ptr, MSG_SIZE, RPMA_MR_USAGE_RECV, &clnt->recv_mr)){
+    if (rpma_mr_reg(peer, clnt->recv_ptr, MSG_SIZE, RPMA_MR_USAGE_RECV, &clnt->recv_mr)){
       free(clnt->recv_ptr);
       clnt->recv_ptr = NULL;
       free(clnt->send_ptr);
@@ -92,7 +92,7 @@ struct client_res* client_new(struct server_res *svr, struct rpma_conn_req *req)
       return NULL;
     }
 
-		if(rpma_mr_reg(peer, clnt->send_ptr, MSG_SIZE, RPMA_MR_USAGE_SEND, &clnt->send_mr)){
+    if (rpma_mr_reg(peer, clnt->send_ptr, MSG_SIZE, RPMA_MR_USAGE_SEND, &clnt->send_mr)){
       (void) rpma_mr_dereg(&clnt->recv_mr);
       free(clnt->recv_ptr);
       clnt->recv_ptr = NULL;
@@ -118,22 +118,22 @@ int client_add_to_epoll(struct client_res *clnt, int epoll) {
   int fd;
   int ret = rpma_conn_get_event_fd(clnt->conn, &fd);
   if (ret)
-          return ret;
+    return ret;
   ret = epoll_add(epoll, fd, clnt, client_handle_connection_event,
                   &clnt->ev_conn_event);
   if (ret)
-          return ret;
+    return ret;
 
   /* get the connection's completion fd and add it to epoll */
   ret = rpma_conn_get_completion_fd(clnt->conn, &fd);
   if (ret) {
-          epoll_delete(epoll, &clnt->ev_conn_event);
-          return ret;
+    epoll_delete(epoll, &clnt->ev_conn_event);
+    return ret;
   }
   ret = epoll_add(epoll, fd, clnt, client_handle_completion,
                   &clnt->ev_conn_cmpl);
   if (ret)
-          epoll_delete(epoll, &clnt->ev_conn_event);
+    epoll_delete(epoll, &clnt->ev_conn_event);
 
   return ret;
 }
@@ -142,14 +142,14 @@ int client_add_to_epoll(struct client_res *clnt, int epoll) {
  * client_delete -- release client's resources
  */
 void client_delete(struct client_res *clnt) {
-  printf("%s:%d:%s\n", __FILE__, __LINE__, __FUNCTION__);
+  LOG("solt: %d", clnt->client_id);
   struct server_res *svr = clnt->svr;
 
   if(clnt->dst_ptr) {
     char str[65];
     memcpy(str, clnt->dst_ptr, 64);
     str[64] = '\0';
-    printf("client.%d: %s\n", clnt->client_id, str);
+    LOG("client.%d: %s\n", clnt->client_id, str);
   }
 
   if (clnt->ev_conn_cmpl.fd != -1) {
@@ -177,7 +177,7 @@ void client_delete(struct client_res *clnt) {
 
   if(clnt->dst_mr != NULL) {
     rpma_mr_dereg(&clnt->dst_mr);
-    printf("%s:%d:is_pmem: %d\n", __FILE__, __LINE__, clnt->is_pmem);
+    LOG("is_pmem: %d\n", clnt->is_pmem);
     if(clnt->is_pmem) {
       pmem_unmap(clnt->dst_ptr, clnt->dst_size);
     } else {
@@ -206,9 +206,9 @@ void client_handle_completion(struct custom_event *ce)
     if (ret == RPMA_E_NO_COMPLETION) {
       return;
     } else if (ret == RPMA_E_INVAL) {
-      fprintf(stderr, "Line%d :conn is NULL\n", __LINE__);
+      LOG("conn is NULL: %s", rpma_err_2str(ret));
     } else if (ret == RPMA_E_PROVIDER) {
-      fprintf(stderr, "Line%d :ibv_poll_cq(3) failed with a provider error\n", __LINE__);
+      LOG("ibv_poll_cq(3) failed with a provider error: %s", rpma_err_2str(ret));
     }
 
     /* another error occured - disconnect */
@@ -224,14 +224,14 @@ void client_handle_completion(struct custom_event *ce)
     if (ret == RPMA_E_NO_COMPLETION) {
       return;
     } else if (ret == RPMA_E_INVAL) {
-      fprintf(stderr, "Line%d :conn or cmpl is NULL\n", __LINE__);
+      LOG("conn or cmpl is NULL: %s", rpma_err_2str(ret));
     } else if (ret == RPMA_E_PROVIDER) {
-      fprintf(stderr, "Line%d :ibv_poll_cq(3) failed with a provider error\n", __LINE__);
+      LOG("ibv_poll_cq(3) failed with a provider error: %s", rpma_err_2str(ret));
     } else if (ret == RPMA_E_UNKNOWN) {
-      fprintf(stderr, "Line%d :ibv_poll_cq(3) failed but no provider error is available\n", __LINE__);
+      LOG("ibv_poll_cq(3) failed but no provider error is available: %s", rpma_err_2str(ret));
     } else {
       // RPMA_E_NOSUPP
-      fprintf(stderr, "Line%d :not supported opcode\n", __LINE__);
+      LOG("Not supported opcode: %s", rpma_err_2str(ret));
     }
 
     /* another error occured - disconnect */
@@ -241,12 +241,11 @@ void client_handle_completion(struct custom_event *ce)
 
   /* validate received completion */
   if (cmpl.op_status != IBV_WC_SUCCESS) {
-    (void) fprintf(stderr,
-                   "[%d]:[op: %d] received completion is not as expected (%d != %d)\n",
-                   clnt->client_id,
-                   cmpl.op,
-                   cmpl.op_status,
-                   IBV_WC_SUCCESS);
+    (void) LOG("[%d]:[op: %d] received completion is not as expected (%d != %d)\n",
+               clnt->client_id,
+               cmpl.op,
+               cmpl.op_status,
+               IBV_WC_SUCCESS);
 
     return;
   }
@@ -257,22 +256,21 @@ void client_handle_completion(struct custom_event *ce)
     //2. prepare a receive for the client's response;
     //3. [optional] response the client
     if (cmpl.op_context != clnt->recv_ptr || cmpl.byte_len != MSG_SIZE) {
-      (void) fprintf(stderr,
-                     "received completion is not as expected (%p != %p [cmpl.op_context] || %"
-                     PRIu32
-                     " != %d [cmpl.byte_len] )\n",
-                     cmpl.op_context, clnt->recv_ptr,
-                     cmpl.byte_len, MSG_SIZE);
+      (void) LOG("received completion is not as expected (%p != %p [cmpl.op_context] || %"
+                 PRIu32
+                 " != %d [cmpl.byte_len] )",
+                 cmpl.op_context, clnt->recv_ptr,
+                 cmpl.byte_len, MSG_SIZE);
       return;
     }
-    fprintf(stdout, "RPMA_OP_RECV\n");
+    LOG("RPMA_OP_RECV");
     deal_require(clnt);
   } else if ( cmpl.op == RPMA_OP_SEND) {
-    fprintf(stdout, "RPMA_OP_SEND\n");
+    LOG("RPMA_OP_SEND");
     //TODO: solve the send condition after send successfully
     //now, don't do any thing
   } else {
-    fprintf(stderr, "operation: %d\n. Shouldn't step in this", cmpl.op);
+    LOG("operation: %d\n. Shouldn't step in this", cmpl.op);
   }
 
   return;
@@ -293,13 +291,13 @@ void client_handle_connection_event(struct custom_event *ce)
     if (ret == RPMA_E_NO_EVENT) {
       return;
     } else if (ret == RPMA_E_INVAL) {
-      fprintf(stderr, "Line%d: conn or event is NULL\n", __LINE__);
+      LOG("conn or event is NULL");
     } else if (ret == RPMA_E_UNKNOWN) {
-      fprintf(stderr, "Line%d: unexpected event\n", __LINE__);
+      LOG("unexpected event");
     } else if (ret == RPMA_E_PROVIDER) {
-      fprintf(stderr, "Line%d: rdma_get_cm_event() or rdma_ack_cm_event() failed\n", __LINE__);
+      LOG("rdma_get_cm_event() or rdma_ack_cm_event() failed");
     } else if (ret == RPMA_E_NOMEM) {
-      fprintf(stderr, "Line%d: out of memory\n", __LINE__);
+      LOG("out of memory");
     }
 
     (void) rpma_conn_disconnect(clnt->conn);
@@ -309,15 +307,15 @@ void client_handle_connection_event(struct custom_event *ce)
   /* proceed to the callback specific to the received event */
   if (event == RPMA_CONN_ESTABLISHED) {
     //don't do anythings if no private data
-    fprintf(stdout, "RPMA_CONN_ESTABLISHED\n");
+    LOG("RPMA_CONN_ESTABLISHED");
     return;
   } else if (event == RPMA_CONN_CLOSED) {
-    fprintf(stdout, "RPMA_CONN_CLOSED\n");
+    LOG("RPMA_CONN_CLOSED");
   } else if (event == RPMA_CONN_LOST) {
-    fprintf(stdout, "RPMA_CONN_LOST\n");
+    LOG("RPMA_CONN_LOST");
   } else {
     //RPMA_CONN_UNDEFINED
-    fprintf(stdout, "RPMA_CONN_UNDEFINED\n");
+    LOG("RPMA_CONN_UNDEFINED");
   }
 
   client_delete(clnt);
@@ -384,9 +382,9 @@ int main(int argc, char* argv[]) {
   }
 
 #ifdef USE_LIBPMEM
-  printf("using pmem\n");
+  LOG("using pmem\n");
 #else
-  printf("Don't use pmem!\n");
+  LOG("Don't use pmem!\n");
 #endif
 
   /* configure logging thresholds to see more details */
@@ -453,7 +451,7 @@ int main(int argc, char* argv[]) {
   }
 
   if (ret == 0) {
-    (void) fprintf(stderr, "Server timed out.\n");
+    (void) LOG("Server timed out.");
   }
 
 err_ep_shutdown:

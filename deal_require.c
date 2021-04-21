@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include "common-conn.h"
 #include "server.h"
+#include "log.h"
 
 
 int get_descriptor(struct client_res* clnt);
@@ -34,17 +35,17 @@ int get_descriptor(struct client_res* clnt) {
   switch (data->op) {
     case RPMA_OP_WRITE:
           ret = get_descriptor_for_write(clnt);
-          printf("RPMA_OP_WRITE\n");
+          LOG("RPMA_OP_WRITE\n");
           break; 
     case RPMA_OP_FLUSH:
           ret = get_descriptor_for_flush(clnt);
-          printf("RPMA_OP_FLUSH\n");
+          LOG("RPMA_OP_FLUSH\n");
           break;
     case RPMA_OP_READ:
          // ret = get_descriptor_for_read(clnt);
          // break;
     default:
-          fprintf(stdout, "the op:%d isn't supported now", data->op);
+          LOG("the op:%d isn't supported now", data->op);
           ret = -1;
   }
   return ret;
@@ -57,7 +58,7 @@ int get_memory_or_pmem(struct client_res* clnt) {
   /* print the received old value of the client's counter */
   struct require_data* data = (struct require_data*)(clnt->recv_ptr);
   uint64_t length = data->size;
-  (void) printf("Alloc memory size: %" PRIu64 "\n", length);
+  (void) LOG("Alloc memory size: %" PRIu64 "\n", length);
   char *path = data->path;
 
   /* resources - memory region */
@@ -73,11 +74,11 @@ int get_memory_or_pmem(struct client_res* clnt) {
   else {
     clnt->dst_ptr = pmem_map_file(path, length, PMEM_FILE_CREATE, 0600, &(clnt->dst_size), &(clnt->is_pmem));
   }
-  printf("is_pmem: %d; size: %ld; ptr: %p\n", clnt->is_pmem, clnt->dst_size, clnt->dst_ptr);
-  printf("path: %s\n", path);
+  LOG("is_pmem: %d; size: %ld; ptr: %p\n", clnt->is_pmem, clnt->dst_size, clnt->dst_ptr);
+  LOG("path: %s\n", path);
 
   if (!clnt->is_pmem || clnt->dst_size != length || clnt->dst_ptr == NULL) {
-    printf("pmem_map failed");
+    LOG("pmem_map failed\n");
     if (!clnt->is_pmem) {
       rdata->type |= RESPONSE_NOT_PMEM;
     }
@@ -93,9 +94,9 @@ int get_memory_or_pmem(struct client_res* clnt) {
     clnt->dst_size = 0;
     return -1;
   } 
-  printf("pmem_map success\n");
+  LOG("pmem_map success\n");
 #else
-  printf("using malloc\n");
+  LOG("using malloc\n");
   clnt->dst_ptr = malloc_aligned(length);
   if (clnt->dst_ptr == NULL) {
     rdata->type |= RESPONSE_MALLOC_FAILED;
@@ -137,19 +138,23 @@ int register_mr_to_descriptor(struct client_res* clnt, enum rpma_op op) {
       break;
     case RPMA_OP_READ:
       usage |= RPMA_MR_USAGE_READ_SRC;
-      break;
+//      break;
+//      don't resolve read operation
     default:
-      printf("%s:%d: Warn: Don't step in this\n", __FILE__, __LINE__);
+      LOG("Warn: Don't step in this\n");
       break;
   }
 
   /* register the memory */
+  LOG("rpma_mr_reg start");
   if ((ret = rpma_mr_reg(svr->peer, clnt->dst_ptr, clnt->dst_size,
         usage, &clnt->dst_mr))) {
     free(clnt->dst_ptr);
     clnt->dst_ptr = NULL;
+    LOG("%s", rpma_err_2str(ret));
     return ret;
   }
+  LOG("rpma_mr_reg end");
 
   /* get size of the memory region's descriptor */
   size_t mr_desc_size;

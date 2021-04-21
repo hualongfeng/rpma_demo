@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "common-conn.h"
+#include "log.h"
 
 /*
  * malloc_aligned -- allocate an aligned chunk of memory
@@ -56,37 +57,47 @@ common_peer_via_address(const char *addr, enum rpma_util_ibv_context_type type,
  * client_connect -- establish a new connection to a server listening at
  * addr:port
  */
-int
-client_connect(struct rpma_peer *peer, const char *addr, const char *port,
+int client_connect(struct rpma_peer *peer, const char *addr, const char *port,
 		struct rpma_conn_private_data *pdata,
 		struct rpma_conn **conn_ptr)
 {
-	struct rpma_conn_req *req = NULL;
-	enum rpma_conn_event conn_event = RPMA_CONN_UNDEFINED;
+  struct rpma_conn_req *req = NULL;
+  enum rpma_conn_event conn_event = RPMA_CONN_UNDEFINED;
 
-	/* create a connection request */
-	int ret = rpma_conn_req_new(peer, addr, port, NULL, &req);
-	if (ret)
-		return ret;
+  struct rpma_conn_cfg *cfg_ptr;
+  rpma_conn_cfg_new(&cfg_ptr);
 
-	/* connect the connection request and obtain the connection object */
-	ret = rpma_conn_req_connect(&req, pdata, conn_ptr);
-	if (ret) {
-		(void) rpma_conn_req_delete(&req);
-		return ret;
-	}
+  //TODO: make those config
+  rpma_conn_cfg_set_sq_size(cfg_ptr, 200);
+  rpma_conn_cfg_set_rq_size(cfg_ptr, 200);
+  rpma_conn_cfg_set_cq_size(cfg_ptr, 200);
 
-	/* wait for the connection to establish */
-	ret = rpma_conn_next_event(*conn_ptr, &conn_event);
-	if (ret) {
-		goto err_conn_delete;
-	} else if (conn_event != RPMA_CONN_ESTABLISHED) {
-		fprintf(stderr,
-				"rpma_conn_next_event returned an unexptected event\n");
-		goto err_conn_delete;
-	}
+  /* create a connection request */
+  int ret = rpma_conn_req_new(peer, addr, port, cfg_ptr, &req);
 
-	return 0;
+  rpma_conn_cfg_delete(&cfg_ptr);
+
+  if (ret)
+    return ret;
+
+  /* connect the connection request and obtain the connection object */
+  ret = rpma_conn_req_connect(&req, pdata, conn_ptr);
+  if (ret) {
+    (void) rpma_conn_req_delete(&req);
+    return ret;
+  }
+
+  /* wait for the connection to establish */
+  ret = rpma_conn_next_event(*conn_ptr, &conn_event);
+  if (ret) {
+    goto err_conn_delete;
+  } else if (conn_event != RPMA_CONN_ESTABLISHED) {
+    fprintf(stderr,
+            "rpma_conn_next_event returned an unexptected event\n");
+    goto err_conn_delete;
+  }
+
+  return 0;
 
 err_conn_delete:
 	(void) rpma_conn_delete(conn_ptr);

@@ -20,6 +20,7 @@
 #include "common-conn.h"
 #include "messages-ping-pong-common.h"
 #include "client_op.h"
+#include "log.h"
 
 #define USAGE_STR "usage: %s <server_address> <port>"
 #define FLUSH_ID	(void *)0xF01D
@@ -58,10 +59,10 @@ int main(int argc, char *argv[])
 
   ret = rpma_socket_connect(socket, addr, port);
 
-  char *path = "/mnt/temp";
-  //ret |= rpma_socket_get_remote_descriptor(socket, REQUIRE_SIZE, RPMA_OP_FLUSH, path);
-  ret |= rpma_socket_get_remote_descriptor(socket, REQUIRE_SIZE, RPMA_OP_WRITE, path);
-
+  char *path = "/mnt/pmem/temp";
+  ret |= rpma_socket_get_remote_descriptor(socket, REQUIRE_SIZE, RPMA_OP_FLUSH, path);
+  //ret |= rpma_socket_get_remote_descriptor(socket, REQUIRE_SIZE, RPMA_OP_WRITE, path);
+  LOG("Get remote descriptor.");
   size_t mr_size = 1024 * 1024 * 1024; //max size, can't extend 1G byte
   //void* mr_ptr = malloc(mr_size);
   void* mr_ptr = malloc_aligned(mr_size);
@@ -75,31 +76,30 @@ int main(int argc, char *argv[])
   struct rpma_mr_local *src_mr = NULL;
   if (ret = rpma_mr_reg(socket->peer, mr_ptr, mr_size, RPMA_MR_USAGE_WRITE_SRC,
                                 &src_mr)) {
-    fprintf(stderr, "%s:%d: %s", __FILE__, __LINE__, rpma_err_2str(ret));
+    LOG("%s", rpma_err_2str(ret));
     return ret;
   }
 
-//  size_t dst_size;
-//  int is_pmem;
-//  size_t length = REQUIRE_SIZE;
-//  size_t offset = 0;
-//  char *ptr = pmem_map_file(path, length, PMEM_FILE_CREATE | PMEM_FILE_SPARSE, 0600, &dst_size, &is_pmem);
-//  printf("is_pmem: %d; size: %ld; ptr: %p\n", is_pmem, dst_size, ptr);
-//  for(int i = 0; i < 10; i++) {
-//        memcpy(ptr + offset, mr_ptr, mr_size);
-//        offset += mr_size;
-//  }
+  /*
+  size_t dst_size;
+  int is_pmem;
+  size_t length = REQUIRE_SIZE;
+  LOG("Start...");
+  char *ptr = pmem_map_file("/mnt/pmem/temp_client", length, PMEM_FILE_CREATE | PMEM_FILE_SPARSE, 0600, &dst_size, &is_pmem);
+  printf("is_pmem: %d; size: %ld; ptr: %p\n", is_pmem, dst_size, ptr);
+  for(size_t offset = 0; offset < length; offset+= mr_size) {
+    memcpy(ptr + offset, mr_ptr, mr_size);
+   // pmem_persist(ptr + offset, mr_size);
+    pmem_persist(ptr, length);
+  }
+  LOG("persist...");
+  pmem_persist(ptr, length);
+  LOG("Finished.");
+  pmem_unmap(ptr, length);
+return 0;
+*/
 
-  ret |= rpma_socket_mr_write(socket, src_mr, mr_size);
-  ret |= rpma_socket_mr_write(socket, src_mr, mr_size);
-  ret |= rpma_socket_mr_write(socket, src_mr, mr_size);
-  ret |= rpma_socket_mr_write(socket, src_mr, mr_size);
-  ret |= rpma_socket_mr_write(socket, src_mr, mr_size);
-  ret |= rpma_socket_mr_write(socket, src_mr, mr_size);
-  ret |= rpma_socket_mr_write(socket, src_mr, mr_size);
-  ret |= rpma_socket_mr_write(socket, src_mr, mr_size);
-  ret |= rpma_socket_mr_write(socket, src_mr, mr_size);
-  ret |= rpma_socket_mr_write(socket, src_mr, mr_size);
+  ret |= rpma_socket_mr_flush(socket, src_mr, mr_size);
 //  ret |= rpma_socket_mr_write1(socket, src_mr, mr_size);
 //  ret |= rpma_socket_mr_write1(socket, src_mr, mr_size);
 //  ret |= rpma_socket_mr_write1(socket, src_mr, mr_size);
