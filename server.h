@@ -47,6 +47,9 @@ struct server_res {
   /* client's resources */
   // TODO: 改成链表数据结构?
   struct client_res clients[CLIENT_MAX];
+
+  //image path
+  char path[1024];
 };
 
 

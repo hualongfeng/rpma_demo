@@ -45,6 +45,10 @@ int rpma_socket_mr_flush1(RPMA_socket *socket, struct rpma_mr_local* mr, size_t 
 
 int rpma_socket_flush(RPMA_socket *socket, void* mr_ptr, size_t mr_size);
 
+int rpma_socket_array_flush(RPMA_socket **sockets, int n, void* mr_ptr, size_t mr_size);
+int rpma_socket_array_mr_flush(RPMA_socket **sockets, struct rpma_mr_local** mrs,
+                               int n, size_t mr_size);
+
 void rpma_socket_close(RPMA_socket *socket);
 
 #endif //CLIENT_OP

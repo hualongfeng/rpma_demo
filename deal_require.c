@@ -3,6 +3,7 @@
 #include <librpma.h>
 #include <libpmem.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include "common-conn.h"
@@ -59,7 +60,22 @@ int get_memory_or_pmem(struct client_res* clnt) {
   struct require_data* data = (struct require_data*)(clnt->recv_ptr);
   uint64_t length = data->size;
   (void) LOG("Alloc memory size: %" PRIu64 "\n", length);
-  char *path = data->path;
+  char *relative_path = data->path;
+  int len_relative_path = strlen(relative_path);
+  int len_dir = strlen(svr->path);
+
+  char *path = (char *)malloc(len_relative_path + len_dir + 2); // '\0' '/'
+  if (path == NULL) {
+    LOG("malloc failed!");
+    return -1;
+  }
+  strcpy(path, svr->path);
+  if(path[len_dir - 1] != '/') {
+    strcpy(path + len_dir, "/");
+    strcpy(path + len_dir + 1, relative_path);
+  } else {
+    strcpy(path + len_dir, relative_path);
+  }
 
   /* resources - memory region */
   size_t mr_size = 0;
@@ -68,7 +84,7 @@ int get_memory_or_pmem(struct client_res* clnt) {
 #ifdef USE_LIBPMEM
 //  truncate(path, length);
 //  clnt->dst_ptr = pmem_map_file(path, length, PMEM_FILE_CREATE | PMEM_FILE_SPARSE, 0600, &(clnt->dst_size), &(clnt->is_pmem));
-  if (access(path, F_OK) != -1) {
+  if (access(path, F_OK) == 0) {
     clnt->dst_ptr = pmem_map_file(path, 0, 0, 0600, &(clnt->dst_size), &(clnt->is_pmem));
   }
   else {
@@ -76,6 +92,7 @@ int get_memory_or_pmem(struct client_res* clnt) {
   }
   LOG("is_pmem: %d; size: %ld; ptr: %p\n", clnt->is_pmem, clnt->dst_size, clnt->dst_ptr);
   LOG("path: %s\n", path);
+  free(path); path = NULL;
 
   if (!clnt->is_pmem || clnt->dst_size != length || clnt->dst_ptr == NULL) {
     LOG("pmem_map failed\n");

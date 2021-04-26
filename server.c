@@ -5,8 +5,11 @@
 #include <sys/epoll.h>
 #include <unistd.h>
 #include <libpmem.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
-#define USAGE_STR "usage: %s <server_address> <port>\n"
+#define USAGE_STR "usage: %s <server_address> <port> [<pmem-path>]\n"
 
 #include "common-conn.h"
 #include "common-epoll.h"
@@ -14,6 +17,8 @@
 #include "server.h"
 #include "deal_require.h"
 #include "log.h"
+
+#define DEFAULT_PMEM_PATH "/mnt/pmem"
 
 
 /*
@@ -402,6 +407,17 @@ int main(int argc, char* argv[]) {
 
   /* server resource */
   struct server_res svr = {0};
+
+
+  if (argc >= 4) {
+      strncpy(svr.path, argv[3], 1024);
+  } else {
+      strncpy(svr.path, DEFAULT_PMEM_PATH, 1024);
+  }
+  LOG("svr.path: %s", svr.path);
+  if(access(svr.path, F_OK) != 0) {
+      mkdir(svr.path, 0777);
+  }
 
   /*
    * lookup an ibv_context via the address and create a new peer using it
