@@ -25,6 +25,10 @@
  */
 #define DESCRIPTORS_MAX_SIZE 24
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct common_data {
   uint64_t data_offset;     /* user data offset */
   uint32_t mr_desc_size;    /* size of mr_desc in descriptors[] */
@@ -87,4 +91,7 @@ int server_accept_connection(struct rpma_ep *ep,
 int common_wait_for_conn_close_and_disconnect(struct rpma_conn **conn_ptr);
 int common_disconnect_and_wait_for_conn_close(struct rpma_conn **conn_ptr);
 
+#ifdef __cplusplus
+}
+#endif
 #endif /* EXAMPLES_COMMON */

@@ -17,7 +17,9 @@
 #include <stdbool.h>
 
 #include <infiniband/verbs.h>
-
+#ifdef __cplusplus
+extern "C" {
+#endif
 /** 7
  * librpma - remote persistent memory access library
  *
@@ -2618,5 +2620,7 @@ typedef void rpma_log_function(
  * https://pmem.io/rpma/
  */
 int rpma_log_set_function(rpma_log_function *log_function);
-
+#ifdef __cplusplus
+}
+#endif
 #endif /* LIBRPMA_H */

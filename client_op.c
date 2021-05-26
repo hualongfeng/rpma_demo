@@ -334,14 +334,39 @@ int rpma_socket_array_mr_flush(RPMA_socket **sockets, struct rpma_mr_local** mrs
   do {
     write_size = remain_size > GIGABYTE ? GIGABYTE : remain_size;
     remain_size -= write_size;
-    for(int i = 0; i < n; i++) {
+    //initiates the write operation
+    for (int i = 0; i < n; i++) {
       ret = rpma_write(sockets[i]->conn, sockets[i]->dst_mr, sockets[i]->dst_offset, mrs[i],
-                      data_offset, write_size, RPMA_F_COMPLETION_ON_ERROR, NULL);
+                      data_offset, write_size, RPMA_F_COMPLETION_ALWAYS, NULL);
+      ret |= rpma_conn_completion_wait(sockets[i]->conn);
+      ret |= rpma_conn_completion_get(sockets[i]->conn, &cmpl);
+    }
+    //wait the write operation is successful
+    for (int i = 0; i < 0; i++) {
+      ret |= rpma_conn_completion_wait(sockets[i]->conn);
+      ret |= rpma_conn_completion_get(sockets[i]->conn, &cmpl);
 
+      if (ret || cmpl.op != RPMA_OP_WRITE || cmpl.op_status != IBV_WC_SUCCESS) {
+        LOG("write failed, %s\n"
+            "unexpected cmpl.op value (%d != %d)\n"
+            "or status with %d\n",
+            rpma_err_2str(ret),
+            cmpl.op, RPMA_OP_WRITE,
+            cmpl.op_status
+           );
+        return -1;
+      }
+    }
+    LOG("write finished");
+    //initiates the flush operation
+    for (int i = 0; i < n; i++) {
       ret = rpma_flush(sockets[i]->conn, sockets[i]->dst_mr, sockets[i]->dst_offset, write_size,
                      sockets[i]->flush_type, RPMA_F_COMPLETION_ALWAYS, mrs[i]);
+      ret |= rpma_conn_completion_wait(sockets[i]->conn);
+      ret |= rpma_conn_completion_get(sockets[i]->conn, &cmpl);
     }
-    for(int i = 0; i < n; i++) {
+    //wait the flush operation is successful
+    for (int i = 0; i < 0; i++) {
       ret |= rpma_conn_completion_wait(sockets[i]->conn);
       ret |= rpma_conn_completion_get(sockets[i]->conn, &cmpl);
 
@@ -355,10 +380,12 @@ int rpma_socket_array_mr_flush(RPMA_socket **sockets, struct rpma_mr_local** mrs
            );
         return -1;
       }
+    }
+    for (int i = 0; i < n; i++) {
       sockets[i]->dst_offset += write_size;
     }
     data_offset += write_size;
-    LOG("%ld", data_offset);
+    LOG("offset: %ld", data_offset);
   } while(remain_size != 0);
 
   LOG("end: %ld", data_offset);

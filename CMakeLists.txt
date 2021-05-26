@@ -4,13 +4,10 @@
 #
 
 cmake_minimum_required(VERSION 3.3)
-project(rpma_demo C)
+project(rpma_demo VERSION 0.1.0)
 
-set(VERSION_MAJOR 0)
-set(VERSION_MINOR 1)
-set(VERSION_PATCH 0)
-
-set(VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH})
+set(CMAKE_CXX_STANDARD 17)
+#set(CMAKE_CXX_FLAGS "-std=c++17 ${CMAKE_CXX_FLAGS}")
 
 set(LIBRPMA_LIBRARIES rpma)
 #set(LIBRPMA_LIBRARY_DIRS ${CMAKE_BINARY_DIR}/lib/)
@@ -39,3 +36,9 @@ add_example(client client.c
                    common-conn.c
                    client_op.c
                    )
+add_example(server_cpp server.cc
+                   common-conn.c
+                   Reactor.cc
+                   EventOp.cc
+                   )
+

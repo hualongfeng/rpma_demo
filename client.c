@@ -55,16 +55,16 @@ int main(int argc, char *argv[])
 	int ret;
 
   RPMA_socket* socket = rpma_socket(addr);
-  RPMA_socket* socket1 = rpma_socket(addr);
+  // RPMA_socket* socket1 = rpma_socket(addr);
   if(socket == NULL) return -1;
-  if(socket1 == NULL) return -1;
+  // if(socket1 == NULL) return -1;
 
   ret = rpma_socket_connect(socket, addr, port);
-  ret = rpma_socket_connect(socket1, addr, "9001");
+  //ret = rpma_socket_connect(socket1, addr, "9001");
 
   char *path = "temp";
   ret |= rpma_socket_get_remote_descriptor(socket, REQUIRE_SIZE, RPMA_OP_FLUSH, path);
-  ret |= rpma_socket_get_remote_descriptor(socket1, REQUIRE_SIZE, RPMA_OP_FLUSH, path);
+  //ret |= rpma_socket_get_remote_descriptor(socket1, REQUIRE_SIZE, RPMA_OP_FLUSH, path);
   //ret |= rpma_socket_get_remote_descriptor(socket, REQUIRE_SIZE, RPMA_OP_WRITE, path);
   LOG("Get remote descriptor.");
   size_t mr_size = 1024 * 1024 * 1024; //max size, can't extend 1G byte
@@ -85,13 +85,13 @@ int main(int argc, char *argv[])
     return ret;
   }
 
-  printf("----------------------------\n");
-  struct rpma_mr_local *src_mr1 = NULL;
-  if (ret = rpma_mr_reg(socket1->peer, mr_ptr, mr_size, RPMA_MR_USAGE_WRITE_SRC,
-                                &src_mr1)) {
-    LOG("%s", rpma_err_2str(ret));
-    return ret;
-  }
+  // printf("----------------------------\n");
+  // struct rpma_mr_local *src_mr1 = NULL;
+  // if (ret = rpma_mr_reg(socket1->peer, mr_ptr, mr_size, RPMA_MR_USAGE_WRITE_SRC,
+  //                               &src_mr1)) {
+  //   LOG("%s", rpma_err_2str(ret));
+  //   return ret;
+  // }
 
   printf("----------------------------\n");
 
@@ -115,18 +115,18 @@ int main(int argc, char *argv[])
 return 0;
 */
 
-  RPMA_socket *sockets[2] = {socket, socket1};
-  struct rpma_mr_local *src_mrs[2] = {src_mr, src_mr1};
-  ret |= rpma_socket_array_mr_flush(sockets, src_mrs, 2, mr_size);
+  // RPMA_socket *sockets[2] = {socket, socket1};
+  // struct rpma_mr_local *src_mrs[2] = {src_mr, src_mr1};
+  // ret |= rpma_socket_array_mr_flush(sockets, src_mrs, 2, mr_size);
 //  ret |= rpma_socket_array_flush(sockets, 2, mr_ptr, mr_size);
 
 
 
   printf("%d\n",rpma_mr_dereg(&src_mr));
-  printf("%d\n",rpma_mr_dereg(&src_mr1));
+  // printf("%d\n",rpma_mr_dereg(&src_mr1));
 
   rpma_socket_close(socket);
-  rpma_socket_close(socket1);
+  // rpma_socket_close(socket1);
 
   return ret ? -1 : 0;
 }
