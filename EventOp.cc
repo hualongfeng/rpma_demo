@@ -29,7 +29,7 @@
 
 AcceptorHandler::AcceptorHandler(const std::string& addr,
                    const std::string& port,
-                   const std::shared_ptr<Reactor> reactor_manager)
+                   const std::weak_ptr<Reactor> reactor_manager)
   : EventHandlerInterface(reactor_manager), _address(addr), _port(port)
  {
 
@@ -37,6 +37,7 @@ AcceptorHandler::AcceptorHandler(const std::string& addr,
   // which "double dispatches" the RPMA_Acceptor::get_handle()
   // method to obtain the Handle.
   // RPMA_Reactor::instance()->register_handler(this, ACCEPT_EVENT);
+  std::cout << "I'm in AcceptorHandler:AcceptorHandler()" << std::endl;
   int ret = 0;
   struct rpma_peer *peer = nullptr;
   ret = server_peer_via_address(addr.c_str(), &peer);
@@ -58,15 +59,17 @@ AcceptorHandler::AcceptorHandler(const std::string& addr,
     throw std::runtime_error("get the endpoint's event file descriptor failed");
   }
   _fd.reset(new int(fd));
+}
 
-  ret = _reactor_manager->register_handler(shared_from_this(), ACCEPT_EVENT);
-  if (ret) {
-    throw std::runtime_error("register Acceptor Handler failed");
+int AcceptorHandler::register_self() {
+  if (auto reactor = _reactor_manager.lock()) {
+    return reactor->register_handler(shared_from_this(), ACCEPT_EVENT);
   }
+  return -1;
 }
 
 AcceptorHandler::~AcceptorHandler() {
-  std::cout << "I'm in ~AcceptorHandler()" << std::endl;
+  std::cout << "I'm in AcceptorHandler::~AcceptorHandler()" << std::endl;
 }
 
 Handle AcceptorHandler::get_handle(EventType et) const {
@@ -93,7 +96,7 @@ int AcceptorHandler::handle(EventType et) {
 
 RPMAHandler::RPMAHandler(std::shared_ptr<struct rpma_peer> peer,
                          struct rpma_ep *ep,
-                         const std::shared_ptr<Reactor> reactor_manager)
+                         const std::weak_ptr<Reactor> reactor_manager)
   : EventHandlerInterface(reactor_manager), _peer(peer) {
   int ret = 0;
 
@@ -151,18 +154,31 @@ RPMAHandler::RPMAHandler(std::shared_ptr<struct rpma_peer> peer,
   _comp_fd.reset(new int(fd));
 
   // Register with the dispatcher for CONNECTION_EVENT.
-  ret = _reactor_manager->register_handler(shared_from_this(), CONNECTION_EVENT);
-  if (ret) {
-    throw std::runtime_error("register RPMAHandler(CONNECTION_EVENT) failed");
-  }
+  // ret = _reactor_manager->register_handler(shared_from_this(), CONNECTION_EVENT);
+  // if (ret) {
+  //   throw std::runtime_error("register RPMAHandler(CONNECTION_EVENT) failed");
+  // }
 
-  ret = _reactor_manager->register_handler(shared_from_this(), COMPLETION_EVENT);
-  if (ret) {
-    _reactor_manager->remove_handler(shared_from_this(), CONNECTION_EVENT);
-    throw std::runtime_error("register RPMAHandler(COMPLETION_EVENT) failed");
-  }
+  // ret = _reactor_manager->register_handler(shared_from_this(), COMPLETION_EVENT);
+  // if (ret) {
+  //   _reactor_manager->remove_handler(shared_from_this(), CONNECTION_EVENT);
+  //   throw std::runtime_error("register RPMAHandler(COMPLETION_EVENT) failed");
+  // }
 }
 
+int RPMAHandler::register_self() {
+  int ret = 0;
+  if (auto reactor = _reactor_manager.lock()) {
+    if (ret = reactor->register_handler(shared_from_this(), CONNECTION_EVENT)) {
+      return ret;
+    }
+    if (ret = reactor->register_handler(shared_from_this(), COMPLETION_EVENT)) {
+      reactor->remove_handler(shared_from_this(), CONNECTION_EVENT);
+      return ret;
+    }
+  }
+  return -1;
+}
 
 RPMAHandler::~RPMAHandler() {
   std::cout << "I'm in ~RPMAHandler()" << std::endl;
@@ -224,8 +240,10 @@ int RPMAHandler::handle_connection_event() {
     LOG("RPMA_CONN_UNDEFINED");
   }
 
-  _reactor_manager->remove_handler(shared_from_this(), CONNECTION_EVENT);
-  _reactor_manager->remove_handler(shared_from_this(), COMPLETION_EVENT);
+  if (auto reactor = _reactor_manager.lock()) {
+    ret = reactor->remove_handler(shared_from_this(), CONNECTION_EVENT);
+    ret |= reactor->remove_handler(shared_from_this(), COMPLETION_EVENT);
+  }
   return ret;
 }
 

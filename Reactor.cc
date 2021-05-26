@@ -46,6 +46,7 @@ int Reactor::fd_set_nonblock(int fd) {
 }
 
 int Reactor::register_handler(EventHandlerPtr eh, EventType et) {
+  std::cout << "I'm in Reactor::register_handler()" << std::endl;
   Handle fd = eh->get_handle(et);
   if (fd == -1) {
     return -1;
@@ -57,16 +58,19 @@ int Reactor::register_handler(EventHandlerPtr eh, EventType et) {
   }
 
   //event_table.emplace(fd, EventHandle{eh, et}); 
-  //event_table.emplace(fd, EventHandle{eh, et}); 
+  event_table.emplace(fd, EventHandle());
+  EventHandle &ed = event_table[fd];
+  ed.type = et;
+  ed.handler = eh;
 
   // prepare an epoll event
   struct epoll_event event;
   event.events = EPOLLIN;
-  //event.data.ptr = &(event_table[fd]);
+  event.data.ptr = &ed;
 
   if (epoll_ctl(_epoll, EPOLL_CTL_ADD, eh->get_handle(et), &event)) {
     int err = errno;
-    //event_table.erase(fd);
+    event_table.erase(fd);
     return err;
   }
 
@@ -80,7 +84,7 @@ int Reactor::remove_handler(EventHandlerPtr eh, EventType et) {
   }
 
   epoll_ctl(_epoll, EPOLL_CTL_DEL, fd, NULL);
-  //event_table.erase(fd);
+  event_table.erase(fd);
   return 0;
 }
 

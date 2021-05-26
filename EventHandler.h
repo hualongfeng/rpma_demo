@@ -16,10 +16,12 @@ enum EventType {
   COMPLETION_EVENT = 1u < 2,
 };
 
-class EventHandler : public std::enable_shared_from_this<EventHandler> {
+class EventHandler {
 public:
 
-  virtual ~EventHandler() {}
+  virtual ~EventHandler() {
+      std::cout << "I'm in EventHandler::~EventHandler()" << std::endl;
+  }
 
   // Hook method that is called back by the RPMA_Reactor
   // to handle events.
@@ -27,6 +29,8 @@ public:
 
   // Hook method that returns the underlying I/O handle.
   virtual Handle get_handle(EventType et) const = 0;
+
+  virtual int register_self() = 0;
 
 };
 
@@ -36,6 +40,7 @@ struct EventHandle {
   EventType type;
   EventHandlerPtr handler;
   EventHandle(EventHandlerPtr h, EventType t) : type(t), handler(h) {}
+  EventHandle() {}
 };
 
 
