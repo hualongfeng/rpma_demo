@@ -5,6 +5,7 @@
 #include "Reactor.h"
 #include <librpma.h>
 #include <unistd.h>
+#include <inttypes.h>
 
 class EventHandlerInterface : public EventHandler {
 public:
@@ -15,7 +16,6 @@ public:
 protected:
   std::weak_ptr<Reactor> _reactor_manager;
 };
-
 
 struct HandleDeleter {
   void operator() (Handle *ptr) {
@@ -53,10 +53,6 @@ public:
 
   virtual int register_self() override;
 
-//   std::shared_ptr<AcceptorHandler> shared_from_this() {
-//     return std::static_pointer_cast<AcceptorHandler>(EventHandler::shared_from_this());
-//   }
-
   // Factory method that accepts a new connection request and
   // creates a RPMA_Handler object to handle connection event
   // using the connection.
@@ -79,7 +75,7 @@ private:
 struct RpmaConnDeleter {
   void operator() (struct rpma_conn *conn) {
     std::cout << "I'm in RpmaConnDeleter()" << std::endl;
-    rpma_conn_disconnect(conn); // TODO: how to avoid twice disconnect?
+    rpma_conn_disconnect(conn); // TODO: how to avoid twice disconnect? 不直接使用这个结构体，再加一层warp
     rpma_conn_delete(&conn);
   }
 };
@@ -114,10 +110,6 @@ public:
 
   int handle_completion();
   int handle_connection_event();
-
-//   std::shared_ptr<RPMAHandler> shared_from_this() {
-//     return std::static_pointer_cast<RPMAHandler>(EventHandler::shared_from_this());
-//   }
 
   // Get the I/O Handle (called by the RPMA_Reactor when 
   // RPMA_Handler is registered).

@@ -307,9 +307,14 @@ int RPMAHandler::handle_completion() {
     }
     LOG("RPMA_OP_RECV");
     //deal_require(clnt);
-    rpma_send(_conn.get(), send_mr.get(), 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, NULL);
+    void (*func)();
+    func = []{std::cout << "I'm in lambda" << std::endl;};
+    rpma_send(_conn.get(), send_mr.get(), 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, (void*)func);
   } else if ( cmpl.op == RPMA_OP_SEND) {
     LOG("RPMA_OP_SEND");
+    void (*func)();
+    func = (void (*)())(cmpl.op_context);
+    func();
     //TODO: solve the send condition after send successfully
     //now, don't do any thing
   } else {
