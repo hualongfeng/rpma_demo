@@ -3,8 +3,7 @@
 
 #include <memory>
 #include <iostream>
-#include <unistd.h>
-#include <librpma.h>
+
 // The type of a handle is system specific
 // this example uses RPMA I/O handles, which are 
 // plain integer values.
@@ -42,8 +41,5 @@ struct EventHandle {
   EventHandle(EventHandlerPtr h, EventType t) : type(t), handler(h) {}
   EventHandle() {}
 };
-
-
-
 
 #endif //_EVENT_HANDLER_H_

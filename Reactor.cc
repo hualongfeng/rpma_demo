@@ -1,25 +1,12 @@
 #include "Reactor.h"
 
-#include <inttypes.h>
-#include <librpma.h>
 #include <iostream>
-//#include <cstdlib>
-//#include <cstdio>
-#include <assert.h>
-#include <sys/epoll.h>
 #include <unistd.h>
-#include <libpmem.h>
-#include <string>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <errno.h>
-#include <stddef.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
 #include <memory>
 #include <unordered_map>
 #include "common-conn.h"
-#include "log.h"
 
 Reactor::Reactor() {
   std::cout << "I'm in Reactor::Reactor()" << std::endl;

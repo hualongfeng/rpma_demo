@@ -3,6 +3,8 @@
 
 #include "EventHandler.h"
 #include "Reactor.h"
+#include <librpma.h>
+#include <unistd.h>
 
 class EventHandlerInterface : public EventHandler {
 public:
