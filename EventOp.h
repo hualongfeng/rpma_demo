@@ -25,13 +25,14 @@ using unique_handle_ptr = std::unique_ptr<Handle, HandleDeleter>;
 
 struct RpmaPeerDeleter {
   void operator() (struct rpma_peer *peer) {
-    rpma_peer_delete(&peer);
     std::cout << "I'm in RpmaPeerDeleter()" << std::endl;
+    rpma_peer_delete(&peer);
   }
 };
 
 struct RpmaEpDeleter {
   void operator() (struct rpma_ep *ep) {
+    std::cout << "I'm in RpmaEpDeleter()" << std::endl;
     rpma_ep_shutdown(&ep);
   }
 };
@@ -75,6 +76,7 @@ private:
 
 struct RpmaConnDeleter {
   void operator() (struct rpma_conn *conn) {
+    std::cout << "I'm in RpmaConnDeleter()" << std::endl;
     rpma_conn_disconnect(conn); // TODO: how to avoid twice disconnect?
     rpma_conn_delete(&conn);
   }
@@ -83,11 +85,19 @@ using unique_rpma_conn_ptr = std::unique_ptr<struct rpma_conn, RpmaConnDeleter>;
 
 struct RpmaMRDeleter {
   void operator() (struct rpma_mr_local *mr_ptr) {
+    std::cout << "I'm in RpmaMRDeleter()" << std::endl;
     rpma_mr_dereg(&mr_ptr);
   }
 };
 using unique_rpma_mr_ptr = std::unique_ptr<struct rpma_mr_local, RpmaMRDeleter>;
 
+struct MallocDeleter {
+  void operator() (uint8_t *ptr) {
+    std::cout << "I'm in MallocAlignedDeleter()" << std::endl;
+    free(ptr);
+  }
+};
+using unique_malloc_ptr = std::unique_ptr<uint8_t, MallocDeleter>;
 
 class RPMAHandler : public EventHandlerInterface, public std::enable_shared_from_this<RPMAHandler>{
 public:
@@ -111,11 +121,11 @@ public:
   // RPMA_Handler is registered).
   virtual Handle get_handle(EventType et) const override;
 private:
-  std::unique_ptr<char> ptr;
+  std::unique_ptr<uint8_t> ptr;
   unique_rpma_mr_ptr mr;
-  std::unique_ptr<char> send_ptr;
+  unique_malloc_ptr send_ptr;
   unique_rpma_mr_ptr send_mr;
-  std::unique_ptr<char> recv_ptr;
+  unique_malloc_ptr recv_ptr;
   unique_rpma_mr_ptr recv_mr;
 
   // Receives connection request from a client

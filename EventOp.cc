@@ -22,10 +22,10 @@
 #include "common-conn.h"
 #include "log.h"
 
+#include "messages-ping-pong-common.h"
 
 
-
-#define MSG_SIZE 1024
+//#define MSG_SIZE 4096
 
 AcceptorHandler::AcceptorHandler(const std::string& addr,
                    const std::string& port,
@@ -84,7 +84,8 @@ int AcceptorHandler::handle(EventType et) {
   // Create a new RPMA_Handler.
   // registers itself with the Reactor
   try {
-    RPMAHandler client_handler(_peer, _ep.get(), _reactor_manager);
+    std::shared_ptr<RPMAHandler> client_handler = std::make_shared<RPMAHandler>(_peer, _ep.get(), _reactor_manager);
+    client_handler->register_self();
   } catch (std::runtime_error &e) {
     std::cout << "Runtime error: " << e.what() << std::endl;
     return -1;
@@ -98,10 +99,21 @@ RPMAHandler::RPMAHandler(std::shared_ptr<struct rpma_peer> peer,
                          struct rpma_ep *ep,
                          const std::weak_ptr<Reactor> reactor_manager)
   : EventHandlerInterface(reactor_manager), _peer(peer) {
+  std::cout << "I'm in RPMAHandler::RPMAHandler()" << std::endl;
   int ret = 0;
 
-  recv_ptr = std::make_unique<char>(MSG_SIZE);
-  send_ptr = std::make_unique<char>(MSG_SIZE);
+  uint8_t *ptr = (uint8_t*)malloc_aligned(MSG_SIZE);
+  if (ptr == nullptr) {
+    throw std::runtime_error("malloc recv memroy failed.");
+  }
+  recv_ptr.reset(ptr);
+
+  ptr = nullptr;
+  ptr = (uint8_t*)malloc_aligned(MSG_SIZE);
+  if (ptr == nullptr) {
+    throw std::runtime_error("malloc send memory failed.");
+  }
+  send_ptr.reset(ptr);
 
   rpma_mr_local *mr{nullptr};
 
@@ -152,18 +164,6 @@ RPMAHandler::RPMAHandler(std::shared_ptr<struct rpma_peer> peer,
     throw std::runtime_error("get the connection's completion fd failed");
   }
   _comp_fd.reset(new int(fd));
-
-  // Register with the dispatcher for CONNECTION_EVENT.
-  // ret = _reactor_manager->register_handler(shared_from_this(), CONNECTION_EVENT);
-  // if (ret) {
-  //   throw std::runtime_error("register RPMAHandler(CONNECTION_EVENT) failed");
-  // }
-
-  // ret = _reactor_manager->register_handler(shared_from_this(), COMPLETION_EVENT);
-  // if (ret) {
-  //   _reactor_manager->remove_handler(shared_from_this(), CONNECTION_EVENT);
-  //   throw std::runtime_error("register RPMAHandler(COMPLETION_EVENT) failed");
-  // }
 }
 
 int RPMAHandler::register_self() {
@@ -205,6 +205,7 @@ int RPMAHandler::handle(EventType et) {
 }
 
 int RPMAHandler::handle_connection_event() {
+  std::cout << "I'm in RPMAHandler::handle_connection_event()" << std::endl;
   int ret = 0;
   // get next connection's event
   enum rpma_conn_event event;
@@ -249,6 +250,7 @@ int RPMAHandler::handle_connection_event() {
 
 
 int RPMAHandler::handle_completion() {
+  std::cout << "I'm in RPMAHandler::handle_completion()" << std::endl;
   int ret = 0;
 
   /* prepare detected completions for processing */
@@ -316,6 +318,7 @@ int RPMAHandler::handle_completion() {
     }
     LOG("RPMA_OP_RECV");
     //deal_require(clnt);
+    rpma_send(_conn.get(), send_mr.get(), 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, NULL);
   } else if ( cmpl.op == RPMA_OP_SEND) {
     LOG("RPMA_OP_SEND");
     //TODO: solve the send condition after send successfully

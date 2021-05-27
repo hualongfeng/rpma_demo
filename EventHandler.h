@@ -11,9 +11,9 @@
 typedef int Handle;
 
 enum EventType {
-  ACCEPT_EVENT     = 1u < 0,
-  CONNECTION_EVENT = 1u < 1,
-  COMPLETION_EVENT = 1u < 2,
+  ACCEPT_EVENT,
+  CONNECTION_EVENT,
+  COMPLETION_EVENT
 };
 
 class EventHandler {

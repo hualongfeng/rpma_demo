@@ -22,6 +22,7 @@
 #include "log.h"
 
 Reactor::Reactor() {
+  std::cout << "I'm in Reactor::Reactor()" << std::endl;
   _epoll = epoll_create1(EPOLL_CLOEXEC);
   if (_epoll == -1) {
     throw std::runtime_error("epoll_create1 failed\n");
@@ -29,6 +30,7 @@ Reactor::Reactor() {
 }
 
 Reactor::~Reactor() {
+  std::cout << "I'm in Reactor::~Reactor()" << std::endl;
   close(_epoll);
 }
 
@@ -78,6 +80,7 @@ int Reactor::register_handler(EventHandlerPtr eh, EventType et) {
 }
 
 int Reactor::remove_handler(EventHandlerPtr eh, EventType et) {
+  std::cout << "I'm in Reactor::remove_handler()" << std::endl;
   Handle fd = eh->get_handle(et);
   if (fd == -1) {
     return -1;
@@ -98,6 +101,7 @@ int Reactor::handle_events() {
   while ((ret = epoll_wait(_epoll, &event, 1 /* # of events */,
                               TIMEOUT_1500S)) == 1) {
     event_handle = static_cast<EventHandle*>(event.data.ptr);
+    std::cout << "I'm in handle_events()  type: " << event_handle->type << std::endl;
     event_handle->handler->handle(event_handle->type);
   }
   return ret;
