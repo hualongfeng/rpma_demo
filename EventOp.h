@@ -6,6 +6,7 @@
 #include <librpma.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include "MemoryManager.h"
 
 class EventHandlerInterface : public EventHandler {
 public:
@@ -31,6 +32,7 @@ struct RpmaPeerDeleter {
     rpma_peer_delete(&peer);
   }
 };
+using unique_rpma_peer_ptr = std::unique_ptr<struct rpma_peer, RpmaPeerDeleter>;
 
 struct RpmaEpDeleter {
   void operator() (struct rpma_ep *ep) {
@@ -39,6 +41,31 @@ struct RpmaEpDeleter {
   }
 };
 using unique_rpma_ep_ptr = std::unique_ptr<struct rpma_ep, RpmaEpDeleter>;
+
+struct RpmaConnDeleter {
+    void operator() (struct rpma_conn *conn) {
+        std::cout << "I'm in RpmaConnDeleter()" << std::endl;
+        rpma_conn_disconnect(conn); // TODO: how to avoid twice disconnect? 不直接使用这个结构体，再加一层warp
+        rpma_conn_delete(&conn);
+    }
+};
+using unique_rpma_conn_ptr = std::unique_ptr<struct rpma_conn, RpmaConnDeleter>;
+
+struct RpmaMRDeleter {
+    void operator() (struct rpma_mr_local *mr_ptr) {
+        std::cout << "I'm in RpmaMRDeleter()" << std::endl;
+        rpma_mr_dereg(&mr_ptr);
+    }
+};
+using unique_rpma_mr_ptr = std::unique_ptr<struct rpma_mr_local, RpmaMRDeleter>;
+
+struct MallocDeleter {
+    void operator() (uint8_t *ptr) {
+        std::cout << "I'm in MallocAlignedDeleter()" << std::endl;
+        free(ptr);
+    }
+};
+using unique_malloc_ptr = std::unique_ptr<uint8_t, MallocDeleter>;
 
 // Handles client connection requests.
 class AcceptorHandler : public EventHandlerInterface, public std::enable_shared_from_this<AcceptorHandler> {
@@ -72,30 +99,6 @@ private:
 };
 
 
-struct RpmaConnDeleter {
-  void operator() (struct rpma_conn *conn) {
-    std::cout << "I'm in RpmaConnDeleter()" << std::endl;
-    rpma_conn_disconnect(conn); // TODO: how to avoid twice disconnect? 不直接使用这个结构体，再加一层warp
-    rpma_conn_delete(&conn);
-  }
-};
-using unique_rpma_conn_ptr = std::unique_ptr<struct rpma_conn, RpmaConnDeleter>;
-
-struct RpmaMRDeleter {
-  void operator() (struct rpma_mr_local *mr_ptr) {
-    std::cout << "I'm in RpmaMRDeleter()" << std::endl;
-    rpma_mr_dereg(&mr_ptr);
-  }
-};
-using unique_rpma_mr_ptr = std::unique_ptr<struct rpma_mr_local, RpmaMRDeleter>;
-
-struct MallocDeleter {
-  void operator() (uint8_t *ptr) {
-    std::cout << "I'm in MallocAlignedDeleter()" << std::endl;
-    free(ptr);
-  }
-};
-using unique_malloc_ptr = std::unique_ptr<uint8_t, MallocDeleter>;
 
 class RPMAHandler : public EventHandlerInterface, public std::enable_shared_from_this<RPMAHandler>{
 public:
@@ -115,15 +118,22 @@ public:
   // RPMA_Handler is registered).
   virtual Handle get_handle(EventType et) const override;
 private:
-  std::unique_ptr<uint8_t> ptr;
-  unique_rpma_mr_ptr mr;
+  int register_mr_to_descriptor(enum rpma_op op);
+  int register_cfg_to_descriptor();
+  int get_descriptor_for_write();
+  int get_descriptor_for_flush();
+  int get_descriptor();
+  void deal_require();
+
+  // memory resource
+  MemoryManager data_manager;
+  unique_rpma_mr_ptr data_mr;
   unique_malloc_ptr send_ptr;
   unique_rpma_mr_ptr send_mr;
   unique_malloc_ptr recv_ptr;
   unique_rpma_mr_ptr recv_mr;
 
   // Receives connection request from a client
-
   unique_handle_ptr _conn_fd;
   unique_handle_ptr _comp_fd;
   std::shared_ptr<struct rpma_peer> _peer;
@@ -131,4 +141,35 @@ private:
 
 };
 
+class ClientHandler : public EventHandlerInterface, public std::enable_shared_from_this<ClientHandler> {
+public:
+    // Initialize the client request
+    ClientHandler(const std::weak_ptr<Reactor> reactor_manager);
+    ~ClientHandler();
+    virtual int register_self() override;
+    // Hook method that handles the connection request from clients.
+    virtual int handle(EventType et) override;
+
+    int handle_completion();
+    int handle_connection_event();
+
+    // Get the I/O Handle (called by the RPMA_Reactor when
+    // RPMA_Handler is registered).
+    virtual Handle get_handle(EventType et) const override;
+private:
+    // memory resource
+    MemoryManager data_manager;
+    unique_rpma_mr_ptr data_mr;
+    unique_malloc_ptr send_ptr;
+    unique_rpma_mr_ptr send_mr;
+    unique_malloc_ptr recv_ptr;
+    unique_rpma_mr_ptr recv_mr;
+
+    // Receives connection request from a client
+    unique_handle_ptr _conn_fd;
+    unique_handle_ptr _comp_fd;
+    unique_rpma_peer_ptr _peer;
+    unique_rpma_conn_ptr _conn;
+
+}
 #endif //_EVENT_OP_H_

@@ -82,8 +82,6 @@ int AcceptorHandler::handle(EventType et) {
   return 0;
 }
 
-
-
 RPMAHandler::RPMAHandler(std::shared_ptr<struct rpma_peer> peer,
                          struct rpma_ep *ep,
                          const std::weak_ptr<Reactor> reactor_manager)
@@ -125,7 +123,9 @@ RPMAHandler::RPMAHandler(std::shared_ptr<struct rpma_peer> peer,
     throw std::runtime_error("receive an incoming connection request failed.");
   }
 
-  ret = rpma_conn_req_recv(req, recv_mr.get(), 0, MSG_SIZE, recv_ptr.get());
+  ret = rpma_conn_req_recv(req, recv_mr.get(), 0, MSG_SIZE, reinterpret_cast<void *>(static_cast<void(*)()>([](){
+      deal_require();
+  })));
   if (ret) {
     rpma_conn_req_delete(&req);
     throw std::runtime_error("Put an initial receive to be prepared for the first message of the client's ping-pong failed.");
@@ -297,29 +297,180 @@ int RPMAHandler::handle_completion() {
     //1. solve the information based on receive
     //2. prepare a receive for the client's response;
     //3. [optional] response the client
-    if (cmpl.op_context != recv_ptr.get() || cmpl.byte_len != MSG_SIZE) {
-      (void) LOG("received completion is not as expected (%p != %p [cmpl.op_context] || %"
-                 PRIu32
-                 " != %d [cmpl.byte_len] )",
-                 cmpl.op_context, recv_ptr.get(),
-                 cmpl.byte_len, MSG_SIZE);
-      return ret;
-    }
+//    if (cmpl.op_context != recv_ptr.get() || cmpl.byte_len != MSG_SIZE) {
+//      (void) LOG("received completion is not as expected (%p != %p [cmpl.op_context] || %"
+//                 PRIu32
+//                 " != %d [cmpl.byte_len] )",
+//                 cmpl.op_context, recv_ptr.get(),
+//                 cmpl.byte_len, MSG_SIZE);
+//      return ret;
+//    }
     LOG("RPMA_OP_RECV");
     //deal_require(clnt);
-    void (*func)();
-    func = []{std::cout << "I'm in lambda" << std::endl;};
-    rpma_send(_conn.get(), send_mr.get(), 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, (void*)func);
+    //void (*func)();
+//    func = []{std::cout << "I'm in lambda" << std::endl;};
+//    rpma_send(_conn.get(), send_mr.get(), 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, (void*)func);
   } else if ( cmpl.op == RPMA_OP_SEND) {
-    LOG("RPMA_OP_SEND");
-    void (*func)();
-    func = (void (*)())(cmpl.op_context);
-    func();
+//    LOG("RPMA_OP_SEND");
+//    void (*func)();
+//    func = (void (*)())(cmpl.op_context);
+//    func();
     //TODO: solve the send condition after send successfully
     //now, don't do any thing
   } else {
     LOG("operation: %d\n. Shouldn't step in this", cmpl.op);
-  }                                                                                              
-
+  }
+  auto op_func = reinterpret_cast<void(*)()>(const_cast<void *>(cmpl.op_context));
+  if (op_func) {
+      op_func();
+  } else {
+      LOG("op_context is nullptr");
+  }
   return ret;
+}
+
+int RPMAHandler::register_mr_to_descriptor(enum rpma_op op) {
+    int ret = 0;
+
+    int usage = 0;
+    switch (op) {
+        case RPMA_OP_FLUSH:
+            usage |= (data_manager.is_pmem() ? RPMA_MR_USAGE_FLUSH_TYPE_PERSISTENT : RPMA_MR_USAGE_FLUSH_TYPE_VISIBILITY);
+            // don't have break
+        case RPMA_OP_WRITE:
+            usage |= RPMA_MR_USAGE_WRITE_DST;
+            break;
+        case RPMA_OP_READ:
+            usage |= RPMA_MR_USAGE_READ_SRC;
+//      break;
+//      don't resolve read operation
+        default:
+            LOG("Warn: Don't step in this\n");
+            break;
+    }
+
+    /* register the memory */
+    rpma_mr_local *mr{nullptr};
+    if ((ret = rpma_mr_reg(_peer.get(), data_manager.get_pointer(), data_manager.size(),
+                           usage, &mr))) {
+        LOG("%s", rpma_err_2str(ret));
+        return ret;
+    }
+    data_mr.reset(mr);
+
+    /* get size of the memory region's descriptor */
+    size_t mr_desc_size;
+    ret = rpma_mr_get_descriptor_size(_mr, &mr_desc_size);
+
+    /* calculate data for the client write */
+    struct response_data* rdata = send_ptr.get();
+    rdata->type = RESPONSE_NORMAL;
+    struct common_data *data = &rdata->data;
+    data->data_offset = 0;
+    data->mr_desc_size = mr_desc_size;
+    data->pcfg_desc_size = 0;
+
+    /* get the memory region's descriptor */
+    rpma_mr_get_descriptor(data_mr, &data->descriptors[0]);
+    return 0;
+}
+
+// only used to flush
+int RPMAHandler::register_cfg_to_descriptor() {
+    int ret = 0;
+
+    /* resources - memory region */
+    struct rpma_peer_cfg *pcfg = NULL;
+
+    /* create a peer configuration structure */
+    ret |= rpma_peer_cfg_new(&pcfg);
+
+    if (data_manager.is_pmem()) {
+        /* configure peer's direct write to pmem support */
+        ret = rpma_peer_cfg_set_direct_write_to_pmem(pcfg, true);
+        if (ret) {
+            (void) rpma_peer_cfg_delete(&pcfg);
+            return ret;
+        }
+    }
+
+    /* get size of the peer config descriptor */
+    size_t pcfg_desc_size;
+    ret = rpma_peer_cfg_get_descriptor_size(pcfg, &pcfg_desc_size);
+
+    /* calculate data for the client write */
+    struct response_data* rdata = send_ptr.get();
+    struct common_data *data = &rdata->data;
+    data->pcfg_desc_size = pcfg_desc_size;
+
+    /*
+     * Get the peer's configuration descriptor.
+     * The pcfg_desc descriptor is saved in the `descriptors[]` array
+     * just after the mr_desc descriptor.
+     */
+    rpma_peer_cfg_get_descriptor(pcfg, &data->descriptors[data->mr_desc_size]);
+
+    (void) rpma_peer_cfg_delete(&pcfg);
+
+    return 0;
+}
+
+int RPMAHandler::get_descriptor_for_write() {
+    struct require_data* data = (struct require_data*)(recv_ptr.get());
+    uint64_t length = data->size;
+    (void) LOG("Alloc memory size: %" PRIu64 "\n", length);
+    char *path = data->path;
+    if (data_manager.get_pointer() == nullptr) {
+        data_manager.init(length, std::string(path));
+    }
+    return register_mr_to_descriptor(RPMA_OP_WRITE);
+}
+
+int RPMAHandler::get_descriptor_for_flush() {
+    struct require_data* data = (struct require_data*)(recv_ptr.get());
+    uint64_t length = data->size;
+    (void) LOG("Alloc memory size: %" PRIu64 "\n", length);
+    char *path = data->path;
+    if (data_manager.get_pointer() == nullptr) {
+        data_manager.init(length, std::string(path));
+    }
+
+    ret |= register_mr_to_descriptor(clnt, RPMA_OP_FLUSH);
+    ret |= register_cfg_to_descriptor(clnt);
+    return ret;
+}
+
+int RPMAHandler::get_descriptor() {
+    struct require_data* data = (struct require_data*)(recv_ptr.get());
+    int ret = 0;
+    switch (data->op) {
+        case RPMA_OP_WRITE:
+            ret = get_descriptor_for_write();
+            LOG("RPMA_OP_WRITE\n");
+            break;
+        case RPMA_OP_FLUSH:
+            ret = get_descriptor_for_flush();
+            LOG("RPMA_OP_FLUSH\n");
+            break;
+        case RPMA_OP_READ:
+            // ret = get_descriptor_for_read(clnt);
+            // break;
+        default:
+            LOG("the op:%d isn't supported now", data->op);
+            ret = -1;
+    }
+    return ret;
+}
+
+void RPMAHandler::deal_require() {
+    get_descriptor();
+
+    /* prepare a receive for the client's response */
+    rpma_recv(_conn.get(), recv_mr.get(), 0, MSG_SIZE, reinterpret_cast<void *>(static_cast<void(*)()>([](){
+        deal_require();
+    })));
+
+    /* send the common_data to the client */
+    rpma_send(_conn.get(), send_mr.get(), 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, nullptr);
+
 }
