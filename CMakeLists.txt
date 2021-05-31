@@ -40,5 +40,6 @@ add_example(server_cpp server.cc
                    common-conn.c
                    Reactor.cc
                    EventOp.cc
+                   MemoryManager.cc
                    )
 

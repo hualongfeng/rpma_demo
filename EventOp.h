@@ -171,5 +171,5 @@ private:
     unique_rpma_peer_ptr _peer;
     unique_rpma_conn_ptr _conn;
 
-}
+};
 #endif //_EVENT_OP_H_

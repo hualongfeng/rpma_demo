@@ -85,6 +85,7 @@ int main(int argc, char *argv[])
     return ret;
   }
 
+  rpma_socket_mr_flush(socket, src_mr, mr_size);
   // printf("----------------------------\n");
   // struct rpma_mr_local *src_mr1 = NULL;
   // if (ret = rpma_mr_reg(socket1->peer, mr_ptr, mr_size, RPMA_MR_USAGE_WRITE_SRC,

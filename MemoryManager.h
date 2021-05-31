@@ -10,20 +10,20 @@
 
 class MemoryManager {
 public:
-    MemoryManager(uint64_t size, string &path);
-    MemoryManager() {}
-    ~MemoryManager();
-    void init(uint64_t size, string &path);
-    void *get_pointer();
-    uint64_t size() {return size;}
-    bool is_pmem() { return is_pmem;}
+  MemoryManager(uint64_t size, std::string &path);
+  MemoryManager() {}
+  ~MemoryManager();
+  void init(uint64_t size, std::string &path);
+  void *get_pointer();
+  uint64_t size() {return _size;}
+  bool is_pmem() { return _is_pmem;}
 private:
-    void *get_memory_from_pmem(string &path);
-    void *get_memory_from_dram();
+  void *get_memory_from_pmem(std::string &path);
+  void *get_memory_from_dram();
 
-    void *data{nullptr};
-    uint64_t size;
-    bool is_pmem;
+  void *_data{nullptr};
+  uint64_t _size;
+  bool _is_pmem;
 };
 
 
