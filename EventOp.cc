@@ -174,7 +174,7 @@ int RPMAHandler::register_self() {
       return ret;
     }
   }
-  return -1;
+  return ret;
 }
 
 RPMAHandler::~RPMAHandler() {
@@ -477,4 +477,245 @@ void RPMAHandler::deal_require() {
 
   /* send the common_data to the client */
   rpma_send(_conn.get(), send_mr.get(), 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, nullptr);
+}
+
+
+ClientHandler::ClientHandler(const std::string& addr,
+                             const std::string& port,
+                             const std::weak_ptr<Reactor> reactor_manager)
+    : EventHandlerInterface(reactor_manager), _address(addr), _port(port) {
+  std::cout << "I'm in ClientHandler::ClientHandler()" << std::endl;
+  int ret = 0;
+  struct rpma_peer *peer = nullptr;
+  ret = client_peer_via_address(addr.c_str(), &peer);
+  if (ret) {
+    throw std::runtime_error("lookup an ibv_context via the address and create a new peer using it failed");
+  }
+  _peer.reset(peer);
+
+  uint8_t *ptr = (uint8_t*)malloc_aligned(MSG_SIZE);
+  if (ptr == nullptr) {
+    throw std::runtime_error("malloc recv memroy failed.");
+  }
+  recv_ptr.reset(ptr);
+
+  ptr = nullptr;
+  ptr = (uint8_t*)malloc_aligned(MSG_SIZE);
+  if (ptr == nullptr) {
+    throw std::runtime_error("malloc send memory failed.");
+  }
+  send_ptr.reset(ptr);
+
+  rpma_mr_local *mr{nullptr};
+
+  ret = rpma_mr_reg(peer, recv_ptr.get(), MSG_SIZE, RPMA_MR_USAGE_RECV, &mr);
+  if (ret) {
+    throw std::runtime_error("recv memory region registers failed.");
+  }
+  recv_mr.reset(mr);
+
+  mr = nullptr;
+  ret = rpma_mr_reg(peer, send_ptr.get(), MSG_SIZE, RPMA_MR_USAGE_SEND, &mr);
+  if (ret) {
+    throw std::runtime_error("send memory region registers failed.");
+  }
+  send_mr.reset(mr);
+
+  struct rpma_conn_req *req = nullptr;
+  struct rpma_conn_cfg *cfg_ptr = nullptr;
+  ret = rpma_conn_cfg_new(&cfg_ptr);
+  if (ret) {
+    throw std::runtime_error("new cfg failed");
+  }
+
+  //TODO: make those config
+  rpma_conn_cfg_set_sq_size(cfg_ptr, 200);
+  rpma_conn_cfg_set_rq_size(cfg_ptr, 200);
+  rpma_conn_cfg_set_cq_size(cfg_ptr, 200);
+
+  ret = rpma_conn_req_new(peer, addr.c_str(), port.c_str(), cfg_ptr, &req);
+  rpma_conn_cfg_delete(&cfg_ptr);
+  if (ret) {
+    throw std::runtime_error("create a new outgoing connection request object failed");
+  }
+
+  struct rpma_conn *conn;
+  ret = rpma_conn_req_connect(&req, nullptr, &conn);
+  if (ret) {
+    if (req != nullptr) {
+      rpma_conn_req_delete(&req);
+    }
+    throw std::runtime_error("initiate processing the connection request");
+  }
+  _conn.reset(conn);
+
+  Handle fd;
+  ret = rpma_conn_get_event_fd(conn, &fd);
+  if (ret) {
+    throw std::runtime_error("get the connection's event fd failed");
+  }
+  _conn_fd.reset(new int(fd));
+
+  ret = rpma_conn_get_completion_fd(conn, &fd);
+  if (ret) {
+    throw std::runtime_error("get the connection's completion fd failed");
+  }
+  _comp_fd.reset(new int(fd));
+}
+
+ClientHandler::~ClientHandler() {
+  std::cout << "I'm in ClientHandler::~ClientHandler()" << std::endl;
+}
+
+int ClientHandler::register_self() {
+  int ret = 0;
+  if (auto reactor = _reactor_manager.lock()) {
+    if (ret = reactor->register_handler(shared_from_this(), CONNECTION_EVENT)) {
+      return ret;
+    }
+    if (ret = reactor->register_handler(shared_from_this(), COMPLETION_EVENT)) {
+      reactor->remove_handler(shared_from_this(), CONNECTION_EVENT);
+      return ret;
+    }
+  }
+  return ret;
+}
+
+// Hook method that handles the connection request from clients.
+int ClientHandler::handle(EventType et) {
+  if (et == CONNECTION_EVENT) {
+    return handle_connection_event();
+  }
+  if (et == COMPLETION_EVENT) {
+    return handle_completion();
+  }
+  return -1;
+}
+
+int ClientHandler::handle_completion() {
+  std::cout << "I'm in RPMAHandler::handle_completion()" << std::endl;
+  int ret = 0;
+
+  /* prepare detected completions for processing */
+  ret = rpma_conn_completion_wait(_conn.get());
+  if (ret) {
+    /* no completion is ready - continue */
+    if (ret == RPMA_E_NO_COMPLETION) {
+      return 0;
+    } else if (ret == RPMA_E_INVAL) {
+      LOG("conn is NULL: %s", rpma_err_2str(ret));
+    } else if (ret == RPMA_E_PROVIDER) {
+      LOG("ibv_poll_cq(3) failed with a provider error: %s", rpma_err_2str(ret));
+    }
+
+    /* another error occured - disconnect */
+    rpma_conn_disconnect(_conn.get());// TODO: what is problem after twice disconnect?
+    return ret;
+  }
+
+  /* get next completion */
+  struct rpma_completion cmpl;
+  ret = rpma_conn_completion_get(_conn.get(), &cmpl);
+  if (ret) {
+    /* no completion is ready - continue */
+    if (ret == RPMA_E_NO_COMPLETION) {
+      return 0;
+    } else if (ret == RPMA_E_INVAL) {
+      LOG("conn or cmpl is NULL: %s", rpma_err_2str(ret));
+    } else if (ret == RPMA_E_PROVIDER) {
+      LOG("ibv_poll_cq(3) failed with a provider error: %s", rpma_err_2str(ret));
+    } else if (ret == RPMA_E_UNKNOWN) {
+      LOG("ibv_poll_cq(3) failed but no provider error is available: %s", rpma_err_2str(ret));
+    } else {
+      // RPMA_E_NOSUPP
+      LOG("Not supported opcode: %s", rpma_err_2str(ret));
+    }
+
+    /* another error occured - disconnect */
+    rpma_conn_disconnect(_conn.get());
+    return ret;
+  }
+
+  /* validate received completion */
+  if (cmpl.op_status != IBV_WC_SUCCESS) {
+    (void) LOG("[op: %d] received completion is not as expected (%d != %d)\n",
+               cmpl.op,
+               cmpl.op_status,
+               IBV_WC_SUCCESS);
+
+    return ret;
+  }
+
+  if (cmpl.op == RPMA_OP_RECV) {
+    LOG("RPMA_OP_RECV");
+  } else if ( cmpl.op == RPMA_OP_SEND) {
+    LOG("RPMA_OP_SEND");
+  } else {
+    LOG("operation: %d\n. Shouldn't step in this", cmpl.op);
+  }
+
+  if (cmpl.op_context != nullptr) {
+    auto op_func = std::unique_ptr<RpmaOp>{static_cast<RpmaOp*>(const_cast<void *>(cmpl.op_context))};
+    op_func->do_callback();
+  } else {
+    LOG("op_context is nullptr");
+  }
+  return ret;
+}
+
+int ClientHandler::handle_connection_event() {
+  std::cout << "I'm in ClientHandler::handle_connection_event()" << std::endl;
+  int ret = 0;
+  // get next connection's event
+  enum rpma_conn_event event;
+  ret = rpma_conn_next_event(_conn.get(), &event);
+  if (ret) {
+    if (ret == RPMA_E_NO_EVENT) {
+      return 0;
+    } else if (ret == RPMA_E_INVAL) {
+      LOG("conn or event is NULL");
+    } else if (ret == RPMA_E_UNKNOWN) {
+      LOG("unexpected event");
+    } else if (ret == RPMA_E_PROVIDER) {
+      LOG("rdma_get_cm_event() or rdma_ack_cm_event() failed");
+    } else if (ret == RPMA_E_NOMEM) {
+      LOG("out of memory");
+    }
+
+    rpma_conn_disconnect(_conn.get());
+    return ret;
+  }
+
+  /* proceed to the callback specific to the received event */
+  if (event == RPMA_CONN_ESTABLISHED) {
+    //don't do anythings if no private data
+    LOG("RPMA_CONN_ESTABLISHED");
+    connected = true;
+    return 0;
+  } else if (event == RPMA_CONN_CLOSED) {
+    LOG("RPMA_CONN_CLOSED");
+  } else if (event == RPMA_CONN_LOST) {
+    LOG("RPMA_CONN_LOST");
+  } else {
+    //RPMA_CONN_UNDEFINED
+    LOG("RPMA_CONN_UNDEFINED");
+  }
+
+  if (auto reactor = _reactor_manager.lock()) {
+    ret = reactor->remove_handler(shared_from_this(), CONNECTION_EVENT);
+    ret |= reactor->remove_handler(shared_from_this(), COMPLETION_EVENT);
+  }
+  return ret;
+}
+
+// Get the I/O Handle (called by the RPMA_Reactor when
+// RPMA_Handler is registered).
+Handle ClientHandler::get_handle(EventType et) const{
+  if (et == CONNECTION_EVENT) {
+    return *_conn_fd;
+  }
+  if (et == COMPLETION_EVENT) {
+    return *_comp_fd;
+  }
+  return -1;
 }

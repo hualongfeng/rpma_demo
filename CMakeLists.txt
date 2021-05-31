@@ -7,6 +7,7 @@ cmake_minimum_required(VERSION 3.3)
 project(rpma_demo VERSION 0.1.0)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
 #set(CMAKE_CXX_FLAGS "-std=c++17 ${CMAKE_CXX_FLAGS}")
 
 set(LIBRPMA_LIBRARIES rpma)
@@ -37,6 +38,12 @@ add_example(client client.c
                    client_op.c
                    )
 add_example(server_cpp server.cc
+                   common-conn.c
+                   Reactor.cc
+                   EventOp.cc
+                   MemoryManager.cc
+                   )
+add_example(client_cpp client.cc
                    common-conn.c
                    Reactor.cc
                    EventOp.cc

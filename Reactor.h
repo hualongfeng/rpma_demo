@@ -21,6 +21,8 @@ public:
   //int handle_events(TimeValue *timeout = 0);
   int handle_events();
 
+  bool empty() { return event_table.empty(); }
+
 private:
   int fd_set_nonblock(int fd);
 

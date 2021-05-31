@@ -6,6 +6,7 @@
 #include <librpma.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <atomic>
 #include "MemoryManager.h"
 
 class EventHandlerInterface : public EventHandler {
@@ -144,7 +145,10 @@ private:
 class ClientHandler : public EventHandlerInterface, public std::enable_shared_from_this<ClientHandler> {
 public:
     // Initialize the client request
-    ClientHandler(const std::weak_ptr<Reactor> reactor_manager);
+    ClientHandler(const std::string& addr,
+                  const std::string& port,
+                  const std::weak_ptr<Reactor> reactor_manager);
+
     ~ClientHandler();
     virtual int register_self() override;
     // Hook method that handles the connection request from clients.
@@ -156,7 +160,15 @@ public:
     // Get the I/O Handle (called by the RPMA_Reactor when
     // RPMA_Handler is registered).
     virtual Handle get_handle(EventType et) const override;
+
+    // wait for the connection to establish
+    void wait_established() {
+      std::cout << "I'm in wait_established()" << std::endl;
+      while (connected.load() != true);
+    }
 private:
+    std::string _address;
+    std::string _port;
     // memory resource
     MemoryManager data_manager;
     unique_rpma_mr_ptr data_mr;
@@ -171,5 +183,6 @@ private:
     unique_rpma_peer_ptr _peer;
     unique_rpma_conn_ptr _conn;
 
+    std::atomic<bool> connected{false};
 };
 #endif //_EVENT_OP_H_

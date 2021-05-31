@@ -90,6 +90,10 @@ int Reactor::handle_events() {
     event_handle = static_cast<EventHandle*>(event.data.ptr);
     std::cout << "I'm in handle_events()  type: " << event_handle->type << std::endl;
     event_handle->handler->handle(event_handle->type);
+    if (empty()) {
+      std::cout << "My event_table is empty!!!" << std::endl;
+      break;
+    }
   }
   return ret;
 }
