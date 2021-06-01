@@ -34,7 +34,7 @@ public:
   }
 };
 
-class RpmaSend {
+class RpmaSend : public RpmaOp {
 public:
   RpmaSend(std::function<void()> f) : RpmaOp(f) {}
   ~RpmaSend() {}
@@ -66,7 +66,7 @@ public:
   }
 };
 
-class RpmaFlush {
+class RpmaFlush : public RpmaOp {
 public:
   RpmaFlush(std::function<void()> f) : RpmaOp(f) {}
   ~RpmaFlush() {}
@@ -82,7 +82,7 @@ public:
   }
 };
 
-class RpmaRead {
+class RpmaRead : public RpmaOp {
 public:
   RpmaRead(std::function<void()> f) : RpmaOp(f) {}
   ~RpmaRead() {}
@@ -99,7 +99,7 @@ public:
   }
 };
 
-class RpmaWriteAtomic {
+class RpmaWriteAtomic : public RpmaOp {
 public:
   RpmaWriteAtomic(std::function<void()> f) : RpmaOp(f) {}
   ~RpmaWriteAtomic() {}
@@ -113,6 +113,6 @@ public:
                   const void *op_context) {
     return rpma_write_atomic(conn, dst, dst_offset, src, src_offset, flags, op_context);
   }
-}
+};
 
 #endif //_RPMA_OP_H_

@@ -144,45 +144,56 @@ private:
 
 class ClientHandler : public EventHandlerInterface, public std::enable_shared_from_this<ClientHandler> {
 public:
-    // Initialize the client request
-    ClientHandler(const std::string& addr,
-                  const std::string& port,
-                  const std::weak_ptr<Reactor> reactor_manager);
+  // Initialize the client request
+  ClientHandler(const std::string& addr,
+                const std::string& port,
+                const std::string& basename,
+                const size_t image_size,
+                const std::weak_ptr<Reactor> reactor_manager);
 
-    ~ClientHandler();
-    virtual int register_self() override;
-    // Hook method that handles the connection request from clients.
-    virtual int handle(EventType et) override;
+  ~ClientHandler();
+  virtual int register_self() override;
+  // Hook method that handles the connection request from clients.
+  virtual int handle(EventType et) override;
 
-    int handle_completion();
-    int handle_connection_event();
+  int handle_completion();
+  int handle_connection_event();
 
-    // Get the I/O Handle (called by the RPMA_Reactor when
-    // RPMA_Handler is registered).
-    virtual Handle get_handle(EventType et) const override;
+  // Get the I/O Handle (called by the RPMA_Reactor when
+  // RPMA_Handler is registered).
+  virtual Handle get_handle(EventType et) const override;
 
-    // wait for the connection to establish
-    void wait_established() {
-      std::cout << "I'm in wait_established()" << std::endl;
-      while (connected.load() != true);
-    }
+  // wait for the connection to establish
+  void wait_established() {
+    std::cout << "I'm in wait_established()" << std::endl;
+    while (connected.load() != true);
+  }
+  void close();
+  int send();
+  int recv();
+  int get_remote_descriptor();
+  int prepare_for_send();
 private:
-    std::string _address;
-    std::string _port;
-    // memory resource
-    MemoryManager data_manager;
-    unique_rpma_mr_ptr data_mr;
-    unique_malloc_ptr send_ptr;
-    unique_rpma_mr_ptr send_mr;
-    unique_malloc_ptr recv_ptr;
-    unique_rpma_mr_ptr recv_mr;
+  enum rpma_flush_type _flush_type;
+  std::string _address;
+  std::string _port;
+  // memory resource
+  MemoryManager data_manager;
+  unique_rpma_mr_ptr data_mr;
+  size_t _image_size;
+  struct rpma_mr_remote* _image_mr;
+  std::string _basename;
+  unique_malloc_ptr send_ptr;
+  unique_rpma_mr_ptr send_mr;
+  unique_malloc_ptr recv_ptr;
+  unique_rpma_mr_ptr recv_mr;
 
-    // Receives connection request from a client
-    unique_handle_ptr _conn_fd;
-    unique_handle_ptr _comp_fd;
-    unique_rpma_peer_ptr _peer;
-    unique_rpma_conn_ptr _conn;
+  // Receives connection request from a client
+  unique_handle_ptr _conn_fd;
+  unique_handle_ptr _comp_fd;
+  unique_rpma_peer_ptr _peer;
+  unique_rpma_conn_ptr _conn;
 
-    std::atomic<bool> connected{false};
+  std::atomic<bool> connected{false};
 };
 #endif //_EVENT_OP_H_

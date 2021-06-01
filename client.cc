@@ -47,14 +47,15 @@ int main(int argc, char* argv[]) {
 
   char *addr = argv[1];
   char *port = argv[2];
-  std::shared_ptr<Reactor> reactor;// = std::make_shared<Reactor>();
-  std::shared_ptr<ClientHandler> rpma_client;// = std::make_shared<ClientHandler>(addr, port, reactor);
+  std::string basename("temporary");
+  std::shared_ptr<Reactor> reactor;
+  std::shared_ptr<ClientHandler> rpma_client;
 
-  // rpma_client->register_self();
+  int ret = 0;
+
   try {
     reactor = std::make_shared<Reactor>();
-    rpma_client = std::make_shared<ClientHandler>(addr, port, reactor);
-    int ret = 0;
+    rpma_client = std::make_shared<ClientHandler>(addr, port, basename, REQUIRE_SIZE,reactor);
     if (ret = rpma_client->register_self()) {
       std::cout << "ret :" << ret << std::endl;
       return ret;
@@ -75,10 +76,10 @@ int main(int argc, char* argv[]) {
   });
 
   rpma_client->wait_established();
-  // // char *addr = nullptr;
-  // // char *port = nullptr;
-  // // Initialize RPMA server endpoint and register with
-  // // the RPMA_Reactor.
+
+  rpma_client->prepare_for_send();
+  rpma_client->send();
+  rpma_client->recv();
 
   // // NOT REACHED
   // while (true);

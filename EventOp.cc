@@ -482,8 +482,11 @@ void RPMAHandler::deal_require() {
 
 ClientHandler::ClientHandler(const std::string& addr,
                              const std::string& port,
+                             const std::string& basename,
+                             const size_t image_size,
                              const std::weak_ptr<Reactor> reactor_manager)
-    : EventHandlerInterface(reactor_manager), _address(addr), _port(port) {
+    : EventHandlerInterface(reactor_manager), _address(addr), _port(port),
+    _basename(basename), _image_size(image_size) {
   std::cout << "I'm in ClientHandler::ClientHandler()" << std::endl;
   int ret = 0;
   struct rpma_peer *peer = nullptr;
@@ -718,4 +721,82 @@ Handle ClientHandler::get_handle(EventType et) const{
     return *_comp_fd;
   }
   return -1;
+}
+
+int ClientHandler::get_remote_descriptor() {
+  struct response_data* resp_data = reinterpret_cast<struct response_data*>(recv_ptr.get());
+  if (resp_data->type != RESPONSE_NORMAL) {
+    return -1;
+  }
+  struct common_data *dst_data = &resp_data->data;
+
+  int ret = 0;
+  // Create a remote peer configuration structure from the received
+  // descriptor and apply it to the current connection
+  bool direct_write_to_pmem = false;
+  struct rpma_peer_cfg *pcfg = nullptr;
+  if (dst_data->pcfg_desc_size) {
+    rpma_peer_cfg_from_descriptor(&dst_data->descriptors[dst_data->mr_desc_size], dst_data->pcfg_desc_size, &pcfg);
+    rpma_peer_cfg_get_direct_write_to_pmem(pcfg, &direct_write_to_pmem);
+    rpma_conn_apply_remote_peer_cfg(_conn.get(), pcfg);
+    rpma_peer_cfg_delete(&pcfg);
+    // TODO: error handle
+  }
+
+  // Create a remote memory registration structure from received descriptor
+  if (ret = rpma_mr_remote_from_descriptor(&dst_data->descriptors[0], dst_data->mr_desc_size, &_image_mr)) {
+    LOG("%s", rpma_err_2str(ret));
+  }
+
+  //get the remote memory region size
+  size_t size;
+  if (ret = rpma_mr_remote_get_size(_image_mr, &size)) {
+    LOG("%s", rpma_err_2str(ret));
+  }
+
+  if (size < _image_size) {
+    LOG("%s:%d: Remote memory region size too small for writing the"
+    " data of the assumed size (%zu < %ld)",
+    __FILE__, __LINE__, size, _image_size);
+    return -1;
+  }
+
+  /* determine the flush type */
+  if (direct_write_to_pmem) {
+    LOG("RPMA_FLUSH_TYPE_PERSISTENT is supported");
+    _flush_type = RPMA_FLUSH_TYPE_PERSISTENT;
+  } else {
+    LOG("RPMA_FLUSH_TYPE_PERSISTENT is NOT supported");
+    _flush_type = RPMA_FLUSH_TYPE_VISIBILITY;
+  }
+
+  return ret;
+}
+
+int ClientHandler::prepare_for_send() {
+  struct require_data* rdata = reinterpret_cast<struct require_data*>(send_ptr.get());
+  rdata->size = _image_size;
+  rdata->op   = RPMA_OP_FLUSH;
+  rdata->path_size = _basename.length();
+  strncpy(rdata->path, _basename.c_str(), MSG_SIZE - sizeof(struct require_data));
+  return 0;
+}
+
+int ClientHandler::send() {
+  // RpmaSend send(nullptr);
+  return rpma_send(_conn.get(), send_mr.get(), 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, nullptr);
+}
+
+int ClientHandler::recv() {
+  int ret = 0;
+  /* prepare a receive for the client's response */
+  std::unique_ptr<RpmaRecv> rec = std::make_unique<RpmaRecv>([self=this](){
+    self->get_remote_descriptor();
+  });
+
+  ret = (*rec)(_conn.get(), recv_mr.get(), 0, MSG_SIZE, rec.get());
+  if (ret == 0) {
+    rec.release();
+  }
+  return ret;
 }
