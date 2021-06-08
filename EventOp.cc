@@ -92,20 +92,6 @@ RPMAHandler::RPMAHandler(std::shared_ptr<struct rpma_peer> peer,
   std::cout << "I'm in RPMAHandler::RPMAHandler()" << std::endl;
   int ret = 0;
 
-  
-  // uint8_t *ptr = (uint8_t*)malloc_aligned(MSG_SIZE);
-  // if (ptr == nullptr) {
-  //   throw std::runtime_error("malloc recv memroy failed.");
-  // }
-  // recv_ptr.reset(ptr);
-
-  // ptr = nullptr;
-  // ptr = (uint8_t*)malloc_aligned(MSG_SIZE);
-  // if (ptr == nullptr) {
-  //   throw std::runtime_error("malloc send memory failed.");
-  // }
-  // send_ptr.reset(ptr);
-
   rpma_mr_local *mr{nullptr};
   recv_bl.append(bufferptr(MSG_SIZE));
   recv_bl.rebuild_page_aligned();
