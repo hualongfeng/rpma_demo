@@ -85,6 +85,199 @@ int AcceptorHandler::handle(EventType et) {
   return 0;
 }
 
+ConnectionHandler::ConnectionHandler(const std::weak_ptr<Reactor> reactor_manager)
+  : EventHandlerInterface(reactor_manager) {
+  std::cout << "I'm in ConnectionHandler::ConnectionHandler()" << std::endl;
+}
+
+// Notice: call this function after peer is initialized.
+void ConnectionHandler::init_send_recv_buffer() {
+  int ret = 0;
+  rpma_mr_local *mr{nullptr};
+
+  recv_bl.append(bufferptr(MSG_SIZE));
+  recv_bl.rebuild_page_aligned();
+  ret = rpma_mr_reg(_peer.get(), recv_bl.c_str(), MSG_SIZE, RPMA_MR_USAGE_RECV, &mr);
+  if (ret) {
+    throw std::runtime_error("recv memory region registers failed.");
+  }
+  recv_mr.reset(mr);
+
+  mr = nullptr;
+  send_bl.append(bufferptr(MSG_SIZE));
+  send_bl.rebuild_page_aligned();
+  ret = rpma_mr_reg(_peer.get(), send_bl.c_str(), MSG_SIZE, RPMA_MR_USAGE_SEND, &mr);
+  if (ret) {
+    throw std::runtime_error("send memory region registers failed.");
+  }
+  send_mr.reset(mr);
+  return ;
+}
+
+// Notice: call this function after conn is initialized.
+void ConnectionHandler::init_conn_fd() {
+  int ret = 0;
+  Handle fd;
+  ret = rpma_conn_get_event_fd(_conn.get(), &fd);
+  if (ret) {
+    throw std::runtime_error("get the connection's event fd failed");
+  }
+  _conn_fd.reset(new int(fd));
+
+  ret = rpma_conn_get_completion_fd(_conn.get(), &fd);
+  if (ret) {
+    throw std::runtime_error("get the connection's completion fd failed");
+  }
+  _comp_fd.reset(new int(fd));
+  return ;
+}
+
+ConnectionHandler::~ConnectionHandler() {
+  std::cout << "I'm in ConnectionHandler::~ConnectionHandler()" << std::endl;
+  std::cout << "table size: " << callback_table.size() << std::endl;
+  for (auto &it : callback_table) {
+    std::cout << "pointer: " << it << std::endl;
+    auto op_func = std::unique_ptr<RpmaOp>{it};
+  }
+}
+
+Handle ConnectionHandler::get_handle(EventType et) const {
+  if (et == CONNECTION_EVENT) {
+    return *_conn_fd;
+  }
+  if (et == COMPLETION_EVENT) {
+    return *_comp_fd;
+  }
+  return -1;
+}
+
+int ConnectionHandler::handle(EventType et) {
+  if (et == CONNECTION_EVENT) {
+    return handle_connection_event();
+  }
+  if (et == COMPLETION_EVENT) {
+    return handle_completion();
+  }
+  return -1;
+}
+
+int ConnectionHandler::handle_connection_event() {
+  std::cout << "I'm in ConnectionHandler::handle_connection_event()" << std::endl;
+  int ret = 0;
+  // get next connection's event
+  enum rpma_conn_event event;
+  ret = rpma_conn_next_event(_conn.get(), &event);
+  if (ret) {
+    if (ret == RPMA_E_NO_EVENT) {
+      return 0;
+    } else if (ret == RPMA_E_INVAL) {
+      LOG("conn or event is NULL");
+    } else if (ret == RPMA_E_UNKNOWN) {
+      LOG("unexpected event");
+    } else if (ret == RPMA_E_PROVIDER) {
+      LOG("rdma_get_cm_event() or rdma_ack_cm_event() failed");
+    } else if (ret == RPMA_E_NOMEM) {
+      LOG("out of memory");
+    }
+
+    rpma_conn_disconnect(_conn.get());
+    return ret;
+  }
+
+  /* proceed to the callback specific to the received event */
+  if (event == RPMA_CONN_ESTABLISHED) {
+    LOG("RPMA_CONN_ESTABLISHED");
+    return 0;
+  } else if (event == RPMA_CONN_CLOSED) {
+    LOG("RPMA_CONN_CLOSED");
+  } else if (event == RPMA_CONN_LOST) {
+    LOG("RPMA_CONN_LOST");
+  } else {
+    LOG("RPMA_CONN_UNDEFINED");
+  }
+
+  // if (auto reactor = _reactor_manager.lock()) {
+  //   ret = reactor->remove_handler(shared_from_this(), CONNECTION_EVENT);
+  //   ret |= reactor->remove_handler(shared_from_this(), COMPLETION_EVENT);
+  // }
+  ret = remove_self();
+  return ret;
+}
+
+int ConnectionHandler::handle_completion() {
+  std::cout << "I'm in ConnectionHandler::handle_completion()" << std::endl;
+  int ret = 0;
+
+  /* prepare detected completions for processing */
+  ret = rpma_conn_completion_wait(_conn.get());
+  if (ret) {
+    /* no completion is ready - continue */
+    if (ret == RPMA_E_NO_COMPLETION) {
+      return 0;
+    } else if (ret == RPMA_E_INVAL) {
+      LOG("conn is NULL: %s", rpma_err_2str(ret));
+    } else if (ret == RPMA_E_PROVIDER) {
+      LOG("ibv_poll_cq(3) failed with a provider error: %s", rpma_err_2str(ret));
+    }
+
+    /* another error occured - disconnect */
+    rpma_conn_disconnect(_conn.get());// TODO: what is problem after twice disconnect?
+    return ret;
+  }
+
+  /* get next completion */
+  struct rpma_completion cmpl;
+  ret = rpma_conn_completion_get(_conn.get(), &cmpl);
+  if (ret) {
+    /* no completion is ready - continue */
+    if (ret == RPMA_E_NO_COMPLETION) {
+      return 0;
+    } else if (ret == RPMA_E_INVAL) {
+      LOG("conn or cmpl is NULL: %s", rpma_err_2str(ret));
+    } else if (ret == RPMA_E_PROVIDER) {
+      LOG("ibv_poll_cq(3) failed with a provider error: %s", rpma_err_2str(ret));
+    } else if (ret == RPMA_E_UNKNOWN) {
+      LOG("ibv_poll_cq(3) failed but no provider error is available: %s", rpma_err_2str(ret));
+    } else {
+      // RPMA_E_NOSUPP
+      LOG("Not supported opcode: %s", rpma_err_2str(ret));
+    }
+
+    /* another error occured - disconnect */
+    rpma_conn_disconnect(_conn.get());
+    return ret;
+  }
+
+  /* validate received completion */
+  if (cmpl.op_status != IBV_WC_SUCCESS) {
+    (void) LOG("[op: %d] received completion is not as expected (%d != %d)\n",
+               cmpl.op,
+               cmpl.op_status,
+               IBV_WC_SUCCESS);
+
+    return ret;
+  }
+
+  if (cmpl.op == RPMA_OP_RECV) {
+    LOG("RPMA_OP_RECV");
+  } else if ( cmpl.op == RPMA_OP_SEND) {
+    LOG("RPMA_OP_SEND");
+  } else {
+    LOG("operation: %d\n. Shouldn't step in this", cmpl.op);
+  }
+
+  if (cmpl.op_context != nullptr) {
+    auto op_func = std::unique_ptr<RpmaOp>{static_cast<RpmaOp*>(const_cast<void *>(cmpl.op_context))};
+    callback_table.erase(op_func.get());
+    op_func->do_callback();
+  } else {
+    LOG("op_context is nullptr");
+  }
+  return ret;
+}
+
+
+
 RPMAHandler::RPMAHandler(std::shared_ptr<struct rpma_peer> peer,
                          struct rpma_ep *ep,
                          const std::weak_ptr<Reactor> reactor_manager)
@@ -648,7 +841,6 @@ int ClientHandler::handle_connection_event() {
   if (event == RPMA_CONN_ESTABLISHED) {
     //don't do anythings if no private data
     LOG("RPMA_CONN_ESTABLISHED");
-    connected = true;
     return 0;
   } else if (event == RPMA_CONN_CLOSED) {
     LOG("RPMA_CONN_CLOSED");

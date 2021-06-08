@@ -63,6 +63,40 @@ private:
 };
 
 
+class ConnectionHandler : public EventHandlerInterface {
+public:
+  ConnectionHandler(const std::weak_ptr<Reactor> reactor_manager);
+  ~ConnectionHandler();
+  virtual int register_self() = 0;
+  virtual int remove_self() = 0;
+
+  // Hook method that handles the connection request from clients.
+  virtual int handle(EventType et) override;
+   // Get the I/O Handle (called by the RPMA_Reactor when
+  // RPMA_Handler is registered).
+  virtual Handle get_handle(EventType et) const override;
+
+  int handle_completion();
+  int handle_connection_event();
+
+protected:
+  // Notice: call this function after peer is initialized.
+  void init_send_recv_buffer();
+  // Notice: call this function after conn is initialized.
+  void init_conn_fd();
+
+  std::set<RpmaOp*> callback_table;
+  // memory resource
+  bufferlist send_bl;
+  unique_rpma_mr_ptr send_mr;
+  bufferlist recv_bl;
+  unique_rpma_mr_ptr recv_mr;
+
+  unique_handle_ptr _conn_fd;
+  unique_handle_ptr _comp_fd;
+  std::shared_ptr<struct rpma_peer> _peer;
+  unique_rpma_conn_ptr _conn;
+};
 
 class RPMAHandler : public EventHandlerInterface, public std::enable_shared_from_this<RPMAHandler>{
 public:
@@ -93,10 +127,8 @@ private:
   // memory resource
   MemoryManager data_manager;
   unique_rpma_mr_ptr data_mr;
-  // unique_malloc_ptr send_ptr;
   bufferlist send_bl;
   unique_rpma_mr_ptr send_mr;
-  // unique_malloc_ptr recv_ptr;
   bufferlist recv_bl;
   unique_rpma_mr_ptr recv_mr;
 
@@ -159,10 +191,8 @@ private:
   std::string _basename;
   std::set<RpmaOp*> callback_table;
 
-  // unique_malloc_ptr send_ptr;
   bufferlist send_bl;
   unique_rpma_mr_ptr send_mr;
-  // unique_malloc_ptr recv_ptr;
   bufferlist recv_bl;
   unique_rpma_mr_ptr recv_mr;
 
