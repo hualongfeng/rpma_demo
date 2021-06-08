@@ -30,6 +30,7 @@ public:
   virtual Handle get_handle(EventType et) const = 0;
 
   virtual int register_self() = 0;
+  virtual int remove_self() = 0;
 
 };
 

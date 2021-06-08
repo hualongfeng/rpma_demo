@@ -43,6 +43,7 @@ public:
   ~AcceptorHandler();
 
   virtual int register_self() override;
+  virtual int remove_self() override;
 
   // Factory method that accepts a new connection request and
   // creates a RPMA_Handler object to handle connection event
@@ -67,8 +68,8 @@ class ConnectionHandler : public EventHandlerInterface {
 public:
   ConnectionHandler(const std::weak_ptr<Reactor> reactor_manager);
   ~ConnectionHandler();
-  virtual int register_self() = 0;
-  virtual int remove_self() = 0;
+  // virtual int register_self() = 0;
+  // virtual int remove_self() = 0;
 
   // Hook method that handles the connection request from clients.
   virtual int handle(EventType et) override;
@@ -78,6 +79,12 @@ public:
 
   int handle_completion();
   int handle_connection_event();
+
+  // wait for the connection to establish
+  void wait_established() {
+    std::cout << "I'm in wait_established()" << std::endl;
+    while (connected.load() != true);
+  }
 
 protected:
   // Notice: call this function after peer is initialized.
@@ -96,9 +103,11 @@ protected:
   unique_handle_ptr _comp_fd;
   std::shared_ptr<struct rpma_peer> _peer;
   unique_rpma_conn_ptr _conn;
+
+  std::atomic<bool> connected{false};
 };
 
-class RPMAHandler : public EventHandlerInterface, public std::enable_shared_from_this<RPMAHandler>{
+class RPMAHandler : public ConnectionHandler, public std::enable_shared_from_this<RPMAHandler>{
 public:
   // Initialize the client request
   RPMAHandler(std::shared_ptr<struct rpma_peer> peer,
@@ -106,15 +115,8 @@ public:
               const std::weak_ptr<Reactor> reactor_manager);
   ~RPMAHandler();
   virtual int register_self() override;
-  // Hook method that handles the connection request from clients.
-  virtual int handle(EventType et) override;
+  virtual int remove_self() override;
 
-  int handle_completion();
-  int handle_connection_event();
-
-  // Get the I/O Handle (called by the RPMA_Reactor when 
-  // RPMA_Handler is registered).
-  virtual Handle get_handle(EventType et) const override;
 private:
   int register_mr_to_descriptor(enum rpma_op op);
   int register_cfg_to_descriptor();
@@ -123,24 +125,13 @@ private:
   int get_descriptor();
   void deal_require();
 
-  std::set<RpmaOp*> callback_table;
+
   // memory resource
   MemoryManager data_manager;
   unique_rpma_mr_ptr data_mr;
-  bufferlist send_bl;
-  unique_rpma_mr_ptr send_mr;
-  bufferlist recv_bl;
-  unique_rpma_mr_ptr recv_mr;
-
-  // Receives connection request from a client
-  unique_handle_ptr _conn_fd;
-  unique_handle_ptr _comp_fd;
-  std::shared_ptr<struct rpma_peer> _peer;
-  unique_rpma_conn_ptr _conn;
-
 };
 
-class ClientHandler : public EventHandlerInterface, public std::enable_shared_from_this<ClientHandler> {
+class ClientHandler : public ConnectionHandler, public std::enable_shared_from_this<ClientHandler> {
 public:
   // Initialize the client request
   ClientHandler(const std::string& addr,
@@ -151,21 +142,8 @@ public:
 
   ~ClientHandler();
   virtual int register_self() override;
-  // Hook method that handles the connection request from clients.
-  virtual int handle(EventType et) override;
+  virtual int remove_self() override;
 
-  int handle_completion();
-  int handle_connection_event();
-
-  // Get the I/O Handle (called by the RPMA_Reactor when
-  // RPMA_Handler is registered).
-  virtual Handle get_handle(EventType et) const override;
-
-  // wait for the connection to establish
-  void wait_established() {
-    std::cout << "I'm in wait_established()" << std::endl;
-    while (connected.load() != true);
-  }
   void close();
   int send(std::function<void()> callback);
   int recv(std::function<void()> callback);
@@ -189,19 +167,5 @@ private:
   size_t _image_size;
   struct rpma_mr_remote* _image_mr;
   std::string _basename;
-  std::set<RpmaOp*> callback_table;
-
-  bufferlist send_bl;
-  unique_rpma_mr_ptr send_mr;
-  bufferlist recv_bl;
-  unique_rpma_mr_ptr recv_mr;
-
-  // Receives connection request from a client
-  unique_handle_ptr _conn_fd;
-  unique_handle_ptr _comp_fd;
-  unique_rpma_peer_ptr _peer;
-  unique_rpma_conn_ptr _conn;
-
-  std::atomic<bool> connected{false};
 };
 #endif //_EVENT_OP_H_
