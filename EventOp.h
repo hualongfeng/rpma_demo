@@ -89,6 +89,7 @@ private:
   int get_descriptor();
   void deal_require();
 
+  std::set<RpmaOp*> callback_table;
   // memory resource
   MemoryManager data_manager;
   unique_rpma_mr_ptr data_mr;

@@ -117,14 +117,14 @@ RPMAHandler::RPMAHandler(std::shared_ptr<struct rpma_peer> peer,
   }
 
   /* prepare a receive for the client's response */
-  // std::unique_ptr<RpmaReqRecv> recv = std::make_unique<RpmaReqRecv>([self=this](){
-  //   self->deal_require();
-  // });
-
-  // ret = (*recv)(req, recv_mr.get(), 0, MSG_SIZE, recv.get());
-  RpmaReqRecv recv(nullptr);
-  recv(req, recv_mr.get(), 0, MSG_SIZE, nullptr);
-
+  std::unique_ptr<RpmaReqRecv> recv = std::make_unique<RpmaReqRecv>([self=this](){
+    self->deal_require();
+  });
+  ret = (*recv)(req, recv_mr.get(), 0, MSG_SIZE, recv.get());
+  if (ret == 0) {
+    callback_table.insert(recv.get());
+    recv.release();
+  }
   if (ret) {
     rpma_conn_req_delete(&req);
     throw std::runtime_error("Put an initial receive to be prepared for the first message of the client's ping-pong failed.");
@@ -170,6 +170,11 @@ int RPMAHandler::register_self() {
 
 RPMAHandler::~RPMAHandler() {
   std::cout << "I'm in ~RPMAHandler()" << std::endl;
+  std::cout << "table size: " << callback_table.size() << std::endl;
+  for (auto &it : callback_table) {
+    std::cout << "pointer: " << it << std::endl;
+    auto op_func = std::unique_ptr<RpmaOp>{it};
+  }
 }
 
 Handle RPMAHandler::get_handle(EventType et) const {
@@ -291,24 +296,16 @@ int RPMAHandler::handle_completion() {
   }
 
   if (cmpl.op == RPMA_OP_RECV) {
-//    if (cmpl.op_context != recv_ptr.get() || cmpl.byte_len != MSG_SIZE) {
-//      (void) LOG("received completion is not as expected (%p != %p [cmpl.op_context] || %"
-//                 PRIu32
-//                 " != %d [cmpl.byte_len] )",
-//                 cmpl.op_context, recv_ptr.get(),
-//                 cmpl.byte_len, MSG_SIZE);
-//      return ret;
-//    }
     LOG("RPMA_OP_RECV");
-    deal_require();
   } else if ( cmpl.op == RPMA_OP_SEND) {
-   LOG("RPMA_OP_SEND");
+    LOG("RPMA_OP_SEND");
   } else {
     LOG("operation: %d\n. Shouldn't step in this", cmpl.op);
   }
 
   if (cmpl.op_context != nullptr) {
     auto op_func = std::unique_ptr<RpmaOp>{static_cast<RpmaOp*>(const_cast<void *>(cmpl.op_context))};
+    callback_table.erase(op_func.get());
     op_func->do_callback();
   } else {
     LOG("op_context is nullptr");
@@ -350,7 +347,7 @@ int RPMAHandler::register_mr_to_descriptor(enum rpma_op op) {
   ret = rpma_mr_get_descriptor_size(mr, &mr_desc_size);
 
   /* calculate data for the client write */
-  RwlReplicaInitRequestReply init_reply(RWL_REPLICA_FINISHED_SUCCCESSED);
+  RwlReplicaInitRequestReply init_reply(RWL_REPLICA_INIT_SUCCESSED);
   init_reply.desc.mr_desc_size = mr_desc_size;
   init_reply.desc.descriptors.resize(mr_desc_size);
 
@@ -427,18 +424,14 @@ void RPMAHandler::deal_require() {
   get_descriptor();
 
   /* prepare a receive for the client's response */
-  // std::unique_ptr<RpmaRecv> recv = std::make_unique<RpmaRecv>([self=this](){
-  //   self->deal_require();
-  // });
-
-  // int ret = 0;
-  // ret = (*recv)(_conn.get(), recv_mr.get(), 0, MSG_SIZE, recv.get());
-  // if (ret == 0) {
-  //   recv.release();
-  // }
-
-  RpmaRecv recv(nullptr);
-  recv(_conn.get(), recv_mr.get(), 0, MSG_SIZE, nullptr);
+  std::unique_ptr<RpmaRecv> rec = std::make_unique<RpmaRecv>([self=this](){
+    self->deal_require();
+  });
+  int ret = (*rec)(_conn.get(), recv_mr.get(), 0, MSG_SIZE, rec.get());
+  if (ret == 0) {
+    callback_table.insert(rec.get());
+    rec.release();
+  }
 
   /* send the common_data to the client */
   rpma_send(_conn.get(), send_mr.get(), 0, MSG_SIZE,RPMA_F_COMPLETION_ALWAYS, nullptr);
@@ -690,6 +683,7 @@ int ClientHandler::get_remote_descriptor() {
   auto it = recv_bl.cbegin();
   init_reply.decode(it);
   int ret = 0;
+  LOG("init_reply.type: %d", init_reply.type);
   if (init_reply.type == RWL_REPLICA_INIT_SUCCESSED) {
     struct RpmaConfigDescriptor *dst_data = &(init_reply.desc);
     // Create a remote peer configuration structure from the received
