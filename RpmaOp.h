@@ -5,12 +5,44 @@
 #include <librpma.h>
 #include <memory>
 
+struct RpmaPeerDeleter {
+  void operator() (struct rpma_peer *peer) {
+    std::cout << "I'm in RpmaPeerDeleter()" << std::endl;
+    rpma_peer_delete(&peer);
+  }
+};
+using unique_rpma_peer_ptr = std::unique_ptr<struct rpma_peer, RpmaPeerDeleter>;
+
+struct RpmaEpDeleter {
+  void operator() (struct rpma_ep *ep) {
+    std::cout << "I'm in RpmaEpDeleter()" << std::endl;
+    rpma_ep_shutdown(&ep);
+  }
+};
+using unique_rpma_ep_ptr = std::unique_ptr<struct rpma_ep, RpmaEpDeleter>;
+
+struct RpmaConnDeleter {
+    void operator() (struct rpma_conn *conn) {
+        std::cout << "I'm in RpmaConnDeleter()" << std::endl;
+        rpma_conn_disconnect(conn); // TODO: how to avoid twice disconnect? 不直接使用这个结构体，再加一层warp
+        rpma_conn_delete(&conn);
+    }
+};
+using unique_rpma_conn_ptr = std::unique_ptr<struct rpma_conn, RpmaConnDeleter>;
+
+struct RpmaMRDeleter {
+    void operator() (struct rpma_mr_local *mr_ptr) {
+        std::cout << "I'm in RpmaMRDeleter()" << std::endl;
+        rpma_mr_dereg(&mr_ptr);
+    }
+};
+using unique_rpma_mr_ptr = std::unique_ptr<struct rpma_mr_local, RpmaMRDeleter>;
 
 class RpmaOp {
   std::function<void()> func;
 public:
   RpmaOp(std::function<void()> f) : func(f) {}
-  void do_callback() { func(); }
+  void do_callback() { if(func) func(); }
   virtual ~RpmaOp() { std::cout << "I'm in Rpma::~Rpma()" << std::endl; };
 };
 
@@ -50,9 +82,14 @@ public:
 };
 
 class RpmaWrite : public RpmaOp {
+  unique_rpma_mr_ptr _mr;
 public:
   RpmaWrite(std::function<void()> f) : RpmaOp(f) {}
   ~RpmaWrite() {}
+
+  void reset(struct rpma_mr_local *mr = nullptr) noexcept {
+    _mr.reset(mr);
+  }
 
   int operator() ( struct rpma_conn *conn,
                    struct rpma_mr_remote *dst,

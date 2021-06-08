@@ -7,7 +7,11 @@
 #include <unistd.h>
 #include <inttypes.h>
 #include <atomic>
+#include <set>
 #include "MemoryManager.h"
+#include "RpmaOp.h"
+#include "Types.h"
+#include <rados/librados.hpp>
 
 class EventHandlerInterface : public EventHandler {
 public:
@@ -27,38 +31,38 @@ struct HandleDeleter {
 };
 using unique_handle_ptr = std::unique_ptr<Handle, HandleDeleter>;
 
-struct RpmaPeerDeleter {
-  void operator() (struct rpma_peer *peer) {
-    std::cout << "I'm in RpmaPeerDeleter()" << std::endl;
-    rpma_peer_delete(&peer);
-  }
-};
-using unique_rpma_peer_ptr = std::unique_ptr<struct rpma_peer, RpmaPeerDeleter>;
+// struct RpmaPeerDeleter {
+//   void operator() (struct rpma_peer *peer) {
+//     std::cout << "I'm in RpmaPeerDeleter()" << std::endl;
+//     rpma_peer_delete(&peer);
+//   }
+// };
+// using unique_rpma_peer_ptr = std::unique_ptr<struct rpma_peer, RpmaPeerDeleter>;
 
-struct RpmaEpDeleter {
-  void operator() (struct rpma_ep *ep) {
-    std::cout << "I'm in RpmaEpDeleter()" << std::endl;
-    rpma_ep_shutdown(&ep);
-  }
-};
-using unique_rpma_ep_ptr = std::unique_ptr<struct rpma_ep, RpmaEpDeleter>;
+// struct RpmaEpDeleter {
+//   void operator() (struct rpma_ep *ep) {
+//     std::cout << "I'm in RpmaEpDeleter()" << std::endl;
+//     rpma_ep_shutdown(&ep);
+//   }
+// };
+// using unique_rpma_ep_ptr = std::unique_ptr<struct rpma_ep, RpmaEpDeleter>;
 
-struct RpmaConnDeleter {
-    void operator() (struct rpma_conn *conn) {
-        std::cout << "I'm in RpmaConnDeleter()" << std::endl;
-        rpma_conn_disconnect(conn); // TODO: how to avoid twice disconnect? 不直接使用这个结构体，再加一层warp
-        rpma_conn_delete(&conn);
-    }
-};
-using unique_rpma_conn_ptr = std::unique_ptr<struct rpma_conn, RpmaConnDeleter>;
+// struct RpmaConnDeleter {
+//     void operator() (struct rpma_conn *conn) {
+//         std::cout << "I'm in RpmaConnDeleter()" << std::endl;
+//         rpma_conn_disconnect(conn); // TODO: how to avoid twice disconnect? 不直接使用这个结构体，再加一层warp
+//         rpma_conn_delete(&conn);
+//     }
+// };
+// using unique_rpma_conn_ptr = std::unique_ptr<struct rpma_conn, RpmaConnDeleter>;
 
-struct RpmaMRDeleter {
-    void operator() (struct rpma_mr_local *mr_ptr) {
-        std::cout << "I'm in RpmaMRDeleter()" << std::endl;
-        rpma_mr_dereg(&mr_ptr);
-    }
-};
-using unique_rpma_mr_ptr = std::unique_ptr<struct rpma_mr_local, RpmaMRDeleter>;
+// struct RpmaMRDeleter {
+//     void operator() (struct rpma_mr_local *mr_ptr) {
+//         std::cout << "I'm in RpmaMRDeleter()" << std::endl;
+//         rpma_mr_dereg(&mr_ptr);
+//     }
+// };
+// using unique_rpma_mr_ptr = std::unique_ptr<struct rpma_mr_local, RpmaMRDeleter>;
 
 struct MallocDeleter {
     void operator() (uint8_t *ptr) {
@@ -129,9 +133,11 @@ private:
   // memory resource
   MemoryManager data_manager;
   unique_rpma_mr_ptr data_mr;
-  unique_malloc_ptr send_ptr;
+  // unique_malloc_ptr send_ptr;
+  bufferlist send_bl;
   unique_rpma_mr_ptr send_mr;
-  unique_malloc_ptr recv_ptr;
+  // unique_malloc_ptr recv_ptr;
+  bufferlist recv_bl;
   unique_rpma_mr_ptr recv_mr;
 
   // Receives connection request from a client
@@ -169,8 +175,16 @@ public:
     while (connected.load() != true);
   }
   void close();
-  int send();
-  int recv();
+  int send(std::function<void()> callback);
+  int recv(std::function<void()> callback);
+  int write(void *src,
+            size_t offset,
+            size_t len,
+            std::function<void()> callback);
+  int flush(size_t offset,
+            size_t len,
+            std::function<void()> callback);
+  int write_atomic(std::function<void()> callback);
   int get_remote_descriptor();
   int prepare_for_send();
 private:
@@ -183,9 +197,13 @@ private:
   size_t _image_size;
   struct rpma_mr_remote* _image_mr;
   std::string _basename;
-  unique_malloc_ptr send_ptr;
+  std::set<RpmaOp*> callback_table;
+
+  // unique_malloc_ptr send_ptr;
+  bufferlist send_bl;
   unique_rpma_mr_ptr send_mr;
-  unique_malloc_ptr recv_ptr;
+  // unique_malloc_ptr recv_ptr;
+  bufferlist recv_bl;
   unique_rpma_mr_ptr recv_mr;
 
   // Receives connection request from a client

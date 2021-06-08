@@ -23,21 +23,8 @@
 #include "Reactor.h"
 #include "EventHandler.h"
 #include "EventOp.h"
+#include "Types.h"
 
-// void client_init(char *addr, char port) {
-//   try {
-//     std::shared_ptr<Reactor> reactor = std::make_shared<Reactor>();
-//     std::shared_ptr<ClientHandler> rpma_client = std::make_shared<ClientHandler>(addr, port, reactor);
-//     int ret = 0;
-//     if (ret = rpma_client->register_self()) {
-//       return ret;
-//     }
-//     while(true)
-//       reactor->handle_events();
-//   } catch (std::runtime_error e) {
-//     std::cout << __FILE__ << ":" << __LINE__ << " Runtime error: " << e.what() << std::endl;
-//   }
-// }
 
 int main(int argc, char* argv[]) {
 
@@ -78,8 +65,10 @@ int main(int argc, char* argv[]) {
   rpma_client->wait_established();
 
   rpma_client->prepare_for_send();
-  rpma_client->send();
-  rpma_client->recv();
+  rpma_client->send(nullptr);
+  rpma_client->recv([&rpma_client]{
+    rpma_client->get_remote_descriptor();
+  });
 
   // // NOT REACHED
   // while (true);
