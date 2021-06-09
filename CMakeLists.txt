@@ -43,14 +43,12 @@ add_example(client client.c
                    client_op.c
                    )
 add_example(server_cpp server.cc
-                   common-conn.c
                    Reactor.cc
                    EventOp.cc
                    MemoryManager.cc
                    Types.cc
                    )
 add_example(client_cpp client.cc
-                   common-conn.c
                    Reactor.cc
                    EventOp.cc
                    MemoryManager.cc

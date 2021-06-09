@@ -17,6 +17,7 @@ public:
   void *get_pointer();
   uint64_t size() {return _size;}
   bool is_pmem() { return _is_pmem;}
+  int close_and_remove();
 private:
   void *get_memory_from_pmem(std::string &path);
   void *get_memory_from_dram();
@@ -24,6 +25,7 @@ private:
   void *_data{nullptr};
   uint64_t _size;
   bool _is_pmem{false};
+  std::string _path;
 };
 
 

@@ -23,14 +23,6 @@ protected:
   std::weak_ptr<Reactor> _reactor_manager;
 };
 
-struct HandleDeleter {
-  void operator() (Handle *ptr) {
-    close(*ptr);
-    delete ptr;
-  }
-};
-using unique_handle_ptr = std::unique_ptr<Handle, HandleDeleter>;
-
 // Handles client connection requests.
 class AcceptorHandler : public EventHandlerInterface, public std::enable_shared_from_this<AcceptorHandler> {
 public:
@@ -56,7 +48,7 @@ public:
 
 private:
   // Socket factory that accepts client connection.
-  unique_handle_ptr _fd;
+  Handle _fd;
   std::string _address;
   std::string _port;
   std::shared_ptr<struct rpma_peer> _peer;
@@ -86,6 +78,9 @@ public:
     while (connected.load() != true);
   }
 
+  int send(std::function<void()> callback);
+  int recv(std::function<void()> callback);
+
 protected:
   // Notice: call this function after peer is initialized.
   void init_send_recv_buffer();
@@ -93,16 +88,17 @@ protected:
   void init_conn_fd();
 
   std::set<RpmaOp*> callback_table;
-  // memory resource
+
+  std::shared_ptr<struct rpma_peer> _peer;
+  RpmaConn _conn;
+
   bufferlist send_bl;
   unique_rpma_mr_ptr send_mr;
   bufferlist recv_bl;
   unique_rpma_mr_ptr recv_mr;
 
-  unique_handle_ptr _conn_fd;
-  unique_handle_ptr _comp_fd;
-  std::shared_ptr<struct rpma_peer> _peer;
-  unique_rpma_conn_ptr _conn;
+  Handle _conn_fd;
+  Handle _comp_fd;
 
   std::atomic<bool> connected{false};
 };
@@ -119,12 +115,10 @@ public:
 
 private:
   int register_mr_to_descriptor(enum rpma_op op);
-  int register_cfg_to_descriptor();
   int get_descriptor_for_write();
-  int get_descriptor_for_flush();
   int get_descriptor();
   void deal_require();
-
+  int close();
 
   // memory resource
   MemoryManager data_manager;
@@ -136,19 +130,15 @@ public:
   // Initialize the client request
   ClientHandler(const std::string& addr,
                 const std::string& port,
-                const std::string& basename,
-                const size_t image_size,
                 const std::weak_ptr<Reactor> reactor_manager);
 
   ~ClientHandler();
   virtual int register_self() override;
   virtual int remove_self() override;
 
-  void close();
-  int send(std::function<void()> callback);
-  int recv(std::function<void()> callback);
-  int write(void *src,
-            size_t offset,
+  int disconnect();
+
+  int write(size_t offset,
             size_t len,
             std::function<void()> callback);
   int flush(size_t offset,
@@ -157,12 +147,18 @@ public:
   int write_atomic(std::function<void()> callback);
   int get_remote_descriptor();
   int prepare_for_send();
+  int init_replica(epoch_t cache_id, uint64_t cache_size, std::string pool_name, std::string image_name);
+  int close_replica();
+  int set_head(void *head_ptr, uint64_t size);
 private:
+  using clock = ceph::coarse_mono_clock;
+  using time = ceph::coarse_mono_time;
   enum rpma_flush_type _flush_type;
   std::string _address;
   std::string _port;
   // memory resource
-  MemoryManager data_manager;
+  // MemoryManager data_manager;
+  void *data_header;
   unique_rpma_mr_ptr data_mr;
   size_t _image_size;
   struct rpma_mr_remote* _image_mr;

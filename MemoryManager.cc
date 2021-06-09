@@ -3,13 +3,15 @@
 //
 
 #include "MemoryManager.h"
-#include "common-conn.h"
 #include <unistd.h>
 #include <iostream>
 #include <libpmem.h>
 
 MemoryManager::MemoryManager(uint64_t size, std::string &path) : _size(size) {
   std::cout << "I'm in MemoryManager::MemoryManager()" << std::endl;
+  _path = "/mnt/pmem/" + path;
+  std::cout << "path: " << _path << std::endl;
+  _size = size;
   _data = get_memory_from_pmem(path);
   if (_data != nullptr) {
     _is_pmem = true;
@@ -25,10 +27,10 @@ MemoryManager::MemoryManager(uint64_t size, std::string &path) : _size(size) {
 
 void MemoryManager::init(uint64_t size, std::string &path) {
   std::cout << "I'm in MemoryManager::init()" << std::endl;
-  path = "/mnt/pmem/" + path;
-  std::cout << "path: " << path << std::endl;
+  _path = "/mnt/pmem/" + path;
+  std::cout << "path: " << _path << std::endl;
   _size = size;
-  _data = get_memory_from_pmem(path);
+  _data = get_memory_from_pmem(_path);
   if (_data != nullptr) {
     _is_pmem = true;
     return;
@@ -40,6 +42,19 @@ void MemoryManager::init(uint64_t size, std::string &path) {
   }
 }
 
+int MemoryManager::close_and_remove() {
+  std::cout << "I'm in MemoryManager::close_and_remove()" << std::endl;
+  if (_data == nullptr) {
+    return 0;
+  }
+  if (_is_pmem) {
+    pmem_unmap(_data, _size);
+  } else {
+    free(_data);
+  }
+  _data = nullptr;
+  return remove(_path.c_str());
+}
 
 MemoryManager::~MemoryManager() {
   std::cout << "I'm in MemoryManager::~MemoryManager()" << std::endl;
@@ -80,7 +95,7 @@ void* MemoryManager::get_memory_from_pmem(std::string &path) {
 }
 
 void* MemoryManager::get_memory_from_dram() {
-  _data = malloc_aligned(_size);
+  _data = malloc(_size);
 
   return _data;
 }

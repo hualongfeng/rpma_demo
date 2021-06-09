@@ -4,6 +4,7 @@
 #include <functional>
 #include <librpma.h>
 #include <memory>
+#include <atomic>
 
 struct RpmaPeerDeleter {
   void operator() (struct rpma_peer *peer) {
@@ -21,14 +22,38 @@ struct RpmaEpDeleter {
 };
 using unique_rpma_ep_ptr = std::unique_ptr<struct rpma_ep, RpmaEpDeleter>;
 
-struct RpmaConnDeleter {
-    void operator() (struct rpma_conn *conn) {
-        std::cout << "I'm in RpmaConnDeleter()" << std::endl;
-        rpma_conn_disconnect(conn); // TODO: how to avoid twice disconnect? 不直接使用这个结构体，再加一层warp
-        rpma_conn_delete(&conn);
+class RpmaConn {
+  struct rpma_conn *conn{nullptr};
+  std::atomic<bool> disconnected{true};
+public:
+  RpmaConn(struct rpma_conn *conn): conn(conn), disconnected(false) {}
+  RpmaConn() : conn(nullptr), disconnected(true) {}
+  ~RpmaConn() {
+    std::cout << "I'm in RpmaConn::~RpmaConn()" << std::endl;
+    if (conn == nullptr) {
+      return ;
     }
+    if (!disconnected) {
+      rpma_conn_disconnect(conn);
+    }
+    rpma_conn_delete(&conn);
+  }
+
+  void reset(struct rpma_conn *conn) {
+    this->conn = conn;
+    disconnected = false;
+  }
+
+  struct rpma_conn *get() {
+    return conn;
+  }
+
+  int disconnect() {
+    std::cout << "I'm in RpmaConn::disconnect()" << std::endl;
+    disconnected = true;
+    return rpma_conn_disconnect(conn);
+  }
 };
-using unique_rpma_conn_ptr = std::unique_ptr<struct rpma_conn, RpmaConnDeleter>;
 
 struct RpmaMRDeleter {
     void operator() (struct rpma_mr_local *mr_ptr) {
@@ -82,14 +107,9 @@ public:
 };
 
 class RpmaWrite : public RpmaOp {
-  unique_rpma_mr_ptr _mr;
 public:
   RpmaWrite(std::function<void()> f) : RpmaOp(f) {}
   ~RpmaWrite() {}
-
-  void reset(struct rpma_mr_local *mr = nullptr) noexcept {
-    _mr.reset(mr);
-  }
 
   int operator() ( struct rpma_conn *conn,
                    struct rpma_mr_remote *dst,
