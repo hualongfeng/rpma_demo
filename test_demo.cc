@@ -17,7 +17,6 @@
 #include <memory>
 #include <unordered_map>
 #include <thread>
-#include "common-conn.h"
 #include "log.h"
 
 // #include "Reactor.h"

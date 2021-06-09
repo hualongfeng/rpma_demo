@@ -33,15 +33,6 @@ function(add_example name)
 	target_link_libraries(${name} rados rpma ${LIBPMEM_LIBRARIES} ${LIBIBVERBS_LIBRARIES} ${LIBRT_LIBRARIES})
 endfunction()
 
-add_example(server server.c
-                   common-conn.c
-                   common-epoll.c
-                   deal_require.c
-                   )
-add_example(client client.c
-                   common-conn.c
-                   client_op.c
-                   )
 add_example(server_cpp server.cc
                    Reactor.cc
                    EventOp.cc
