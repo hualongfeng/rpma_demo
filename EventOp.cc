@@ -35,7 +35,47 @@ static int common_peer_via_address(const char *addr,
 	return rpma_peer_new(dev, peer_ptr);
 }
 
-//#define MSG_SIZE 4096
+void RpmaPeerDeleter::operator() (struct rpma_peer *peer) {
+  std::cout << "I'm in RpmaPeerDeleter()" << std::endl;
+  rpma_peer_delete(&peer);
+}
+
+void RpmaEpDeleter::operator() (struct rpma_ep *ep) {
+  std::cout << "I'm in RpmaEpDeleter()" << std::endl;
+  rpma_ep_shutdown(&ep);
+}
+
+void RpmaMRDeleter::operator() (struct rpma_mr_local *mr_ptr) {
+  std::cout << "I'm in RpmaMRDeleter()" << std::endl;
+  rpma_mr_dereg(&mr_ptr);
+}
+
+RpmaConn::~RpmaConn() {
+  std::cout << "I'm in RpmaConn::~RpmaConn()" << std::endl;
+  if (conn == nullptr) {
+    return ;
+  }
+  if (!disconnected) {
+    rpma_conn_disconnect(conn);
+  }
+  rpma_conn_delete(&conn);
+  conn = nullptr;
+}
+
+void RpmaConn::reset(struct rpma_conn *conn) {
+  this->conn = conn;
+  disconnected = false;
+}
+
+struct rpma_conn* RpmaConn::get() {
+  return conn;
+}
+
+int RpmaConn::disconnect() {
+  std::cout << "I'm in RpmaConn::disconnect()" << std::endl;
+  disconnected = true;
+  return rpma_conn_disconnect(conn);
+}
 
 AcceptorHandler::AcceptorHandler(const std::string& addr,
                    const std::string& port,

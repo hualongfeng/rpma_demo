@@ -6,63 +6,6 @@
 #include <memory>
 #include <atomic>
 
-struct RpmaPeerDeleter {
-  void operator() (struct rpma_peer *peer) {
-    std::cout << "I'm in RpmaPeerDeleter()" << std::endl;
-    rpma_peer_delete(&peer);
-  }
-};
-using unique_rpma_peer_ptr = std::unique_ptr<struct rpma_peer, RpmaPeerDeleter>;
-
-struct RpmaEpDeleter {
-  void operator() (struct rpma_ep *ep) {
-    std::cout << "I'm in RpmaEpDeleter()" << std::endl;
-    rpma_ep_shutdown(&ep);
-  }
-};
-using unique_rpma_ep_ptr = std::unique_ptr<struct rpma_ep, RpmaEpDeleter>;
-
-class RpmaConn {
-  struct rpma_conn *conn{nullptr};
-  std::atomic<bool> disconnected{true};
-public:
-  RpmaConn(struct rpma_conn *conn): conn(conn), disconnected(false) {}
-  RpmaConn() : conn(nullptr), disconnected(true) {}
-  ~RpmaConn() {
-    std::cout << "I'm in RpmaConn::~RpmaConn()" << std::endl;
-    if (conn == nullptr) {
-      return ;
-    }
-    if (!disconnected) {
-      rpma_conn_disconnect(conn);
-    }
-    rpma_conn_delete(&conn);
-  }
-
-  void reset(struct rpma_conn *conn) {
-    this->conn = conn;
-    disconnected = false;
-  }
-
-  struct rpma_conn *get() {
-    return conn;
-  }
-
-  int disconnect() {
-    std::cout << "I'm in RpmaConn::disconnect()" << std::endl;
-    disconnected = true;
-    return rpma_conn_disconnect(conn);
-  }
-};
-
-struct RpmaMRDeleter {
-    void operator() (struct rpma_mr_local *mr_ptr) {
-        std::cout << "I'm in RpmaMRDeleter()" << std::endl;
-        rpma_mr_dereg(&mr_ptr);
-    }
-};
-using unique_rpma_mr_ptr = std::unique_ptr<struct rpma_mr_local, RpmaMRDeleter>;
-
 class RpmaOp {
   std::function<void()> func;
 public:

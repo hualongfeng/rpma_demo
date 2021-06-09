@@ -13,6 +13,38 @@
 #include "Types.h"
 #include <rados/librados.hpp>
 
+struct RpmaPeerDeleter {
+  void operator() (struct rpma_peer *peer);
+};
+
+struct RpmaEpDeleter {
+  void operator() (struct rpma_ep *ep);
+};
+
+struct RpmaMRDeleter {
+    void operator() (struct rpma_mr_local *mr_ptr);
+};
+
+using unique_rpma_peer_ptr = std::unique_ptr<struct rpma_peer, RpmaPeerDeleter>;
+using unique_rpma_ep_ptr = std::unique_ptr<struct rpma_ep, RpmaEpDeleter>;
+using unique_rpma_mr_ptr = std::unique_ptr<struct rpma_mr_local, RpmaMRDeleter>;
+
+class RpmaConn {
+  struct rpma_conn *conn{nullptr};
+  std::atomic<bool> disconnected{true};
+public:
+  RpmaConn(struct rpma_conn *conn): conn(conn), disconnected(false) {}
+  RpmaConn() : conn(nullptr), disconnected(true) {}
+  ~RpmaConn();
+
+  void reset(struct rpma_conn *conn);
+
+  struct rpma_conn *get();
+
+  int disconnect();
+};
+
+
 class EventHandlerInterface : public EventHandler {
 public:
   EventHandlerInterface(std::weak_ptr<Reactor> reactor_ptr): _reactor_manager(reactor_ptr) {}
