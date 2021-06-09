@@ -16,6 +16,7 @@ MemoryManager::MemoryManager(uint64_t size, std::string &path) : _size(size) {
     return;
   }
 
+  _is_pmem = false;
   _data = get_memory_from_dram();
   if (_data == nullptr) {
     throw std::runtime_error("memory malloc failed");
@@ -32,7 +33,7 @@ void MemoryManager::init(uint64_t size, std::string &path) {
     _is_pmem = true;
     return;
   }
-
+  _is_pmem = false;
   _data = get_memory_from_dram();
   if (_data == nullptr) {
     throw std::runtime_error("memory malloc failed");
@@ -69,7 +70,7 @@ void* MemoryManager::get_memory_from_pmem(std::string &path) {
   else {
     _data = pmem_map_file(path.c_str(), _size, PMEM_FILE_CREATE, 0600, &len, &is_pmem);
   }
-  if (!is_pmem || len != _size || _data == NULL) {
+  if (!is_pmem || len != _size || _data == nullptr) {
     if (_data) {
       pmem_unmap(_data, _size);
       _data = nullptr;
@@ -80,5 +81,6 @@ void* MemoryManager::get_memory_from_pmem(std::string &path) {
 
 void* MemoryManager::get_memory_from_dram() {
   _data = malloc_aligned(_size);
+
   return _data;
 }

@@ -23,7 +23,7 @@ private:
 
   void *_data{nullptr};
   uint64_t _size;
-  bool _is_pmem;
+  bool _is_pmem{false};
 };
 
 
