@@ -194,6 +194,6 @@ private:
   unique_rpma_mr_ptr data_mr;
   size_t _image_size;
   struct rpma_mr_remote* _image_mr;
-  std::string _basename;
+  std::string _image_name;
 };
 #endif //_EVENT_OP_H_

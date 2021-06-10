@@ -313,6 +313,12 @@ int ConnectionHandler::handle_completion() {
     LOG("RPMA_OP_RECV");
   } else if ( cmpl.op == RPMA_OP_SEND) {
     LOG("RPMA_OP_SEND");
+  } else if (cmpl.op == RPMA_OP_WRITE) {
+    LOG("RPMA_OP_WRITE");
+  } else if (cmpl.op == RPMA_OP_FLUSH) {
+    LOG("RPMA_OP_FLUSH");
+  } else if (cmpl.op == RPMA_OP_READ) {
+    LOG("RPMA_OP_READ");
   } else {
     LOG("operation: %d\n. Shouldn't step in this", cmpl.op);
   }
@@ -684,6 +690,7 @@ int ClientHandler::get_remote_descriptor() {
 }
 
 int ClientHandler::init_replica(epoch_t cache_id, uint64_t cache_size, std::string pool_name, std::string image_name) {
+  _image_size = cache_size;
   LOG("");
   RwlReplicaInitRequest init(RWL_REPLICA_INIT_REQUEST);
   init.info.cache_id = cache_id;

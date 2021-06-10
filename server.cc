@@ -1,24 +1,11 @@
 #include <inttypes.h>
-#include <librpma.h>
 #include <iostream>
-#include <assert.h>
-#include <sys/epoll.h>
-#include <unistd.h>
-#include <libpmem.h>
-#include <string>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <errno.h>
-#include <stddef.h>
-#include <sys/epoll.h>
-#include <fcntl.h>
-#include <memory>
-#include <unordered_map>
 #include "log.h"
 
 #include "Reactor.h"
 #include "EventHandler.h"
 #include "EventOp.h"
+
 
 int main(int argc, char* argv[]) {
 
@@ -28,10 +15,7 @@ int main(int argc, char* argv[]) {
 
   char *addr = argv[1];
   char *port = argv[2];
-  // char *addr = nullptr;
-  // char *port = nullptr;
-  // Initialize RPMA server endpoint and register with
-  // the RPMA_Reactor.
+
   try {
     std::shared_ptr<Reactor> reactor = std::make_shared<Reactor>();
     std::shared_ptr<AcceptorHandler> rpma_acceptor = std::make_shared<AcceptorHandler>(addr, port, reactor);
