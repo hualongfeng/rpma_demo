@@ -24,7 +24,7 @@ link_directories(${LIBRPMA_LIBRARY_DIRS})
 FIND_LIBRARY(LIBIBVERBS_LIBRARIES ibverbs)
 FIND_LIBRARY(LIBRT_LIBRARIES rt)
 FIND_LIBRARY(LIBPMEM_LIBRARIES pmem)
-FIND_LIBRARY(LIBRADOS_LIBRARIES rados ceph-common denc-mod-common denc-mod-rbd denc-mod-osd )
+FIND_LIBRARY(LIBRADOS_LIBRARIES rados ceph-common denc-mod-common denc-mod-rbd denc-mod-osd global)
 
 function(add_example name)
 	set(srcs ${ARGN})
